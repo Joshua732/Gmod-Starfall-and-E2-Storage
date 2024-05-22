@@ -1,0 +1,102 @@
+@name TFE Insta Wheel SUS M2
+@inputs Base:entity LWheel:array RWheel:array LeftDriveWheel:entity RightDriveWheel:entity
+@outputs 
+@persist 
+@trigger 
+@strict
+
+##E2 Made by Joshua732
+##Github link https://github.com/Joshua732/GmodE2Storage
+##Please leave this stuff here so people can find my other stuff
+##Bonus points if you do not change the name of this E2
+
+##Basic setup: Wire Base to Baseplate of your vehicle. Wire LeftDriveWheel and RightDriveWheel to your drive wheels (The wheels that your gearbox connects to)
+##Spawn in two Adv Entity makers, Link one to your left track wheels and the other to your right track wheels. (DO NOT INCLUDE THE DRIVE WHEELS)
+##Reset the chips and it will make you your passive SUS
+##Make sure all ropes face forwards amd that they are not mistmatch 
+##Change settings to your liking
+
+## This chip also axis your drive wheels to your baseplate alongside slaving the wheels to the drivewheels, AKA it does all of the work. If you have deco wheels, then you will have to do slaving and other things on your own
+
+##If your tanks starts shaking and flying around, please set your baseplate weight to around 4000. The reason for this is that the Damping applys force to go back to its og pos and the baseplate can not handle it due to low weight.
+if(first()|duped()){                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ##Made by Joshua732
+    if(LeftDriveWheel != noentity() && RightDriveWheel != noentity()){
+    ## SEETTINGS
+    RopeSIZE = 5 # set to 0 to hide ropes
+    ##Changes how the SUS works for your tank, do not touch if you do not understand
+    ##Note keep numbers the same but with different power. If Constant is 30000 then Damping will be 3000. If Constant is 45000 then Damping will be 4500
+    Constant = 40000 #aka the ELASTIC. How strong it is
+    Damping = 4000 ## how much the wheels want to go back to their og pos
+    #ajust so all ropes are forwards and track ropes are even
+    
+    LEFTR = vec(-40,20,20)
+    LIGHTR = vec(-40,-20,20)
+    
+    REFTR = vec(40,20,20)
+    RIGHTR = vec(40,-20,20)
+    
+    
+    ## Do not touch anything beyond this point
+
+    I=0
+    while(I<LWheel:count()){
+        I++
+        Cwheel = LWheel[I,entity]
+        Cwheel:constraintBreak()
+        
+    }
+    I=0
+       while(I<RWheel:count()){
+        I++
+        Cwheel = RWheel[I,entity]
+        Cwheel:constraintBreak()
+        
+    }
+    LeftDriveWheel:constraintBreak()
+    RightDriveWheel:constraintBreak()
+    I = 0
+    T = 0
+    while(I<LWheel:count()){
+    I++
+    Cwheel = LWheel[I,entity]
+   rope(T,Base,Base:toLocal(Cwheel:toWorld(LEFTR)),Cwheel,vec(0,0,0),0, RopeSIZE,"cable/rope",1,vec(255,1,1))
+    T++
+   rope(T,Base,Base:toLocal(Cwheel:toWorld(LIGHTR)),Cwheel,vec(0,0,0),0, RopeSIZE,"cable/rope",1,vec(255,1,1))
+    T++
+   hydraulic(T,Base,Base:toLocal(Cwheel:toWorld(vec(0,0,0))),Cwheel,vec(0,0,0),Constant,Damping,0,"cable/rope",RopeSIZE,1,vec(255,1,1))
+    T++
+   ballsocket(Base,Base:toLocal(Cwheel:toWorld(vec(0,0,0))),Cwheel,vec(-180,-0.1,-0.1),vec(180,0.1,0.1),vec(0,0,0),1)
+}
+
+    I = 0
+    while(I<RWheel:count()){
+    I++
+    Cwheel = RWheel[I,entity]
+   rope(T,Base,Base:toLocal(Cwheel:toWorld(REFTR)),Cwheel,vec(0,0,0),0, RopeSIZE,"cable/rope",1,vec(255,1,1))
+    T++
+   rope(T,Base,Base:toLocal(Cwheel:toWorld(RIGHTR)),Cwheel,vec(0,0,0),0, RopeSIZE,"cable/rope",1,vec(255,1,1))
+    T++
+   hydraulic(T,Base,Base:toLocal(Cwheel:toWorld(vec(0,0,0))),Cwheel,vec(0,0,0),Constant,Damping,0,"cable/rope",RopeSIZE,1,vec(255,1,1))
+    T++
+   ballsocket(Base,Base:toLocal(Cwheel:toWorld(vec(0,0,0))),Cwheel,vec(-180,-0.1,-0.1),vec(180,0.1,0.1),vec(0,0,0),1)
+}
+
+    I = 0
+
+    while(I<LWheel:count()){
+    I++
+    Cwheel = LWheel[I,entity]
+   ballsocket(Cwheel,vec(0,0,0),LeftDriveWheel,vec(180,-0.1,-0.1),vec(-180,0.1,0.1),vec(0,0,0),1)
+}
+
+    I = 0
+    while(I<RWheel:count()){
+    I++
+    Cwheel = RWheel[I,entity]
+   ballsocket(Cwheel,vec(0,0,0),RightDriveWheel,vec(180,-0.1,-0.1),vec(-180,0.1,0.1),vec(0,0,0),1)
+}
+
+axis(LeftDriveWheel,vec(0,0,0),Base,Base:toLocal(LeftDriveWheel:toWorld(vec(0,1,0))))
+axis(RightDriveWheel,vec(0,0,0),Base,Base:toLocal(RightDriveWheel:toWorld(vec(0,1,0))))
+}
+}
