@@ -1,0 +1,891 @@
+--@name Conquest Game
+--@author Joshua732
+--@shared
+
+
+
+if SERVER then
+--THIS IS NOT DONE
+--Made by a funny TFE spessman
+
+--To be able to play the test/prototype/cutting edge version, Join the Forever war server
+
+--Thanks to marchc1 for letting me scream at him while he was sick
+
+--Yeets people from huds on reset
+local TotalDudes = find.allPlayers()
+local MI = 0
+while MI < table.count(TotalDudes) do
+    MI = MI + 1
+    if TotalDudes[MI]:isHUDActive() then
+      enableHud(TotalDudes[MI], false) 
+    end
+end
+--Yeet done
+
+--Config start
+--Kinda Unused rn
+Admin = "Joshua732"
+--Team Tickets
+TicketsR = 100
+TicketsB = 100
+
+TeamRname = "FOX"
+TeamBname = "CNN"
+
+DefColor =  Color(255,255,255)
+
+Playmusic = true
+--Check client for the URL
+--MusicUrl = ""
+
+--Config end
+
+FlagCount = 0
+FlagData = {}
+
+--This was added later, check functions for these if there are bugs
+Redflags = 0
+Blueflags = 0
+
+
+
+
+RedPlayers = {}
+BluePlayers = {}
+
+
+
+
+--Gets the huds
+wire.adjustInputs({"HudR", "HudB","HudS"}, {"entity", "entity","entity"})
+    HudRport = wire.ports.HudR
+    HudBport = wire.ports.HudB
+    HudSport = wire.ports.HudS
+    HudR = HudRport
+    HudB = HudBport
+    HudS = HudSport
+    
+
+--Puts people into their team when they connect to hud and sends it to clients
+hook.add("hudconnected","HudWelcome",function(Hud,Player)
+    
+    printHud(Player, "Welcome to Conquest Game,")
+    --printHud(Player, "Chose your team by typing")
+    --printHud(Player, "!TEAMred or !TEAMblue into chat.")
+    if Hud == HudR then
+         table.insert(RedPlayers,Player)
+         printHud(Player, "You are on Red Team.")
+         printHud(Player, "Hit E on SF to give perms")        
+         net.start("RedData")
+         net.writeTable(RedPlayers)
+         net.send()
+        
+    end
+    if Hud == HudB then
+        table.insert(BluePlayers,Player)
+        printHud(Player, "You are on Blue Team.")
+        printHud(Player, "Hit E on SF to give perms")        
+        net.start("BlueData")
+        net.writeTable(BluePlayers)
+        net.send()
+    end
+    if Hud == HudS then
+        printHud(Player, "You are on Spectator Team.")
+        printHud(Player, "Hit E on SF to give perms")   
+        
+    end
+
+end)
+
+
+
+--Same thing as above but removes them from team
+hook.add("huddisconnected","HuldDis",function(Hud,Player)
+    local I = 0
+    while I < table.count(RedPlayers) do
+        I = I + 1
+        local Pname = RedPlayers[I]
+        if Player == Pname then
+
+            table.remove(RedPlayers, I)
+            
+             net.start("RedData")
+             net.writeTable(RedPlayers)
+             net.send()
+
+        end
+    end
+    
+    local I = 0
+        while I < table.count(BluePlayers) do
+        I = I + 1
+        local Pname = BluePlayers[I]
+        if Player == Pname then
+
+            table.remove(BluePlayers, I)
+            
+             net.start("BlueData")
+             net.writeTable(BluePlayers)
+             net.send()
+
+        end
+    end
+    
+end)
+
+--Removes a ticket if the player dies
+hook.add("PlayerDeath","Death",function(DedDude,Wep,Killer)
+
+
+        --print(DedDude)
+        local IT = 0
+        while IT < table.count(RedPlayers) do
+            IT = IT + 1
+            if DedDude == RedPlayers[IT] then
+                TicketsR = TicketsR - 1
+                
+            net.start("RedTickets")
+            net.writeFloat(TicketsR)
+            net.send()
+            
+
+                
+            end
+        end
+
+        local IT = 0
+        while IT < table.count(BluePlayers) == true do
+            IT = IT + 1
+            if DedDude == BluePlayers[IT] then
+                TicketsB = TicketsB - 1
+                
+
+            
+            net.start("BlueTickets")
+            net.writeFloat(TicketsB)
+            net.send()
+                
+            end
+        end   
+        
+    
+end)
+
+
+
+--This is used for debugging commands n stuff
+hook.add("PlayerSay","TeamJoin",function(plyn,text)
+    if plyn:isHUDActive() then
+        if text == "!Rplayer" then
+            local I = 0
+            while I < table.count(RedPlayers) do
+                I = I + 1
+                printHud(plyn, RedPlayers[I])
+        end
+    end
+        
+        if text == "!Bplayer" then
+            local I = 0
+            while I < table.count(BluePlayers) do
+                I = I + 1
+                printHud(plyn, BluePlayers[I])
+        end
+    end
+    
+        if text == "!Tremove" then
+            TicketsR = TicketsR - 1
+            TicketsB = TicketsB - 1
+            net.start("RedTickets")
+            net.writeFloat(TicketsR)
+            net.send()
+            
+            net.start("BlueTickets")
+            net.writeFloat(TicketsB)
+            net.send()
+
+    end   
+
+        if text == "!Setflag" then
+            printHud(plyn,"Flag is set")
+            if FlagCount < 26 then
+            --printHud(plyn,hologram.hologramsLeft())
+            FlagGen(plyn:getPos())
+        end       
+        end
+ 
+    
+        if text == "!Flagdata" then
+            print(table.count(FlagData))
+        end
+        if text == "!Mplay" then
+            net.start("MusicPlay")
+            net.send()
+        end
+        
+        if text == "!Flagcount" then
+            print("Red teams flags")
+            print(Redflags)
+            
+            print("Blue teams flags")
+            print(Blueflags)
+        end
+    
+end
+end)
+--Gets client errors
+hook.add("StarfallError","PrintError",function(Ent,Dude,msg)
+    print(msg)
+end)
+--Sends data when client connects to hud
+hook.add("ClientInitialized","SendData",function()
+    net.start("HudRdata")
+    net.writeEntity(HudR)
+    net.send()
+
+    net.start("HudBdata")
+    net.writeEntity(HudB)
+    net.send()
+    
+    net.start("RedData")
+    net.writeTable(RedPlayers)
+    net.send()
+    
+    net.start("BlueData")
+    net.writeTable(BluePlayers)
+    net.send()
+    --Float due to hating bits
+    net.start("RedTickets")
+    net.writeFloat(TicketsR)
+    net.send()
+    
+    --Float due to hating bits    
+    net.start("BlueTickets")
+    net.writeFloat(TicketsB)
+    net.send()
+    
+    net.start("TeamRname")
+    net.writeString(TeamRname)
+    net.send()
+    
+    net.start("TeamBname")
+    net.writeString(TeamBname)
+    net.send()
+    
+    net.start("Fdata")
+    net.writeTable(FlagData)
+    net.send()
+   
+
+
+end)
+
+--Backup function if the player death hook does not work. unused rn
+function UpdateTickets()
+
+    net.start("RedTickets")
+    net.writeFloat(TicketsR)
+    net.send()
+    
+    --Float due to hating bits    
+    net.start("BlueTickets")
+    net.writeFloat(TicketsB)
+    net.send()
+      
+    
+end
+ 
+--Check if a person is in a flag and adds ups its cap time by calling another function
+--Only finds people that are in a team to make thigns simple
+function FlagIsCapping()
+    if table.count(FlagData) > 0 then
+        local FlagIter = 1
+        while FlagIter < table.count(FlagData) do
+            local Ptable = find.inBox(FlagData[FlagIter]:getPos() - Vector(300,300,600), FlagData[FlagIter]:getPos() - Vector(-300,-300,-600),function(PlayerF) return PlayerF and PlayerF:isPlayer() and table.hasValue(RedPlayers,PlayerF) or table.hasValue(BluePlayers,PlayerF) end )
+            --print(Ptable[1])
+            if table.count(Ptable) > 0 then
+                PeopleInFlag(Ptable,FlagIter)
+            end
+            FlagIter = FlagIter + 9
+        end
+    end
+end
+--timer.create("TickSend", 5, 0, UpdateTickets)
+
+--This makes the flag blink and does the ownership system
+function PeopleInFlag(TableF,Flagindex)
+    local Rdudes = 0
+    local Bdudes = 0
+    local TabIT = 0
+    --table.hasValue(table tbl, any val)
+    while TabIT < table.count(TableF) do
+        TabIT = TabIT + 1
+        if table.hasValue(RedPlayers, TableF[TabIT]) == true then
+            Rdudes = Rdudes + 1
+        end
+        
+        if table.hasValue(BluePlayers, TableF[TabIT]) == true then
+            Bdudes = Bdudes + 1
+        end
+    end
+    
+    if Rdudes > Bdudes then
+        if FlagData[Flagindex + 7] != 1 then
+        FlagCapRed(Flagindex)
+    end
+    end
+
+    if Bdudes > Rdudes then
+        if FlagData[Flagindex + 7] != 2 then
+        FlagCapBlue(Flagindex)
+    end
+    end    
+    
+end
+
+--Does the flag color changes when capping and sets the flag to a team if it does cap
+--Cap time is 10 secs. Cant be changed rn
+--Called from function above
+function FlagCapRed(TheFlag)
+    local IsFlagBlue = 0
+    if FlagData[TheFlag + 7] == 0 then
+        --print(FlagData[TheFlag+7])
+        if FlagData[TheFlag+6] == Color(255,255,255) then
+             FlagData[TheFlag]:setColor(Color(255,0,0))
+             FlagData[TheFlag+0]:setColor(Color(255,0,0))
+             FlagData[TheFlag+1]:setColor(Color(255,0,0))
+             FlagData[TheFlag+2]:setColor(Color(255,0,0))
+             FlagData[TheFlag+3]:setColor(Color(255,0,0))
+             FlagData[TheFlag+4]:setColor(Color(255,0,0))
+             FlagData[TheFlag+5]:setColor(Color(255,0,0))
+             FlagData[TheFlag+6] = (Color(255,0,0))
+        
+        
+        else
+             FlagData[TheFlag]:setColor(Color(255,255,255))
+             FlagData[TheFlag+0]:setColor(Color(255,255,255))
+             FlagData[TheFlag+1]:setColor(Color(255,255,255))
+             FlagData[TheFlag+2]:setColor(Color(255,255,255))
+             FlagData[TheFlag+3]:setColor(Color(255,255,255))
+             FlagData[TheFlag+4]:setColor(Color(255,255,255))
+             FlagData[TheFlag+5]:setColor(Color(255,255,255))
+             FlagData[TheFlag+6] = (Color(255,255,255))
+        end
+
+    end
+    
+    if FlagData[TheFlag + 7] == 2 then
+
+        if FlagData[TheFlag+6] == Color(0,0,255) then
+             FlagData[TheFlag]:setColor(Color(255,0,0))
+             FlagData[TheFlag+0]:setColor(Color(255,0,0))
+             FlagData[TheFlag+1]:setColor(Color(255,0,0))
+             FlagData[TheFlag+2]:setColor(Color(255,0,0))
+             FlagData[TheFlag+3]:setColor(Color(255,0,0))
+             FlagData[TheFlag+4]:setColor(Color(255,0,0))
+             FlagData[TheFlag+5]:setColor(Color(255,0,0))
+             FlagData[TheFlag+6] = (Color(255,0,0))
+             IsFlagBlue = 1
+        
+        else
+             FlagData[TheFlag]:setColor(Color(0,0,255))
+             FlagData[TheFlag+0]:setColor(Color(0,0,255))
+             FlagData[TheFlag+1]:setColor(Color(0,0,255))
+             FlagData[TheFlag+2]:setColor(Color(0,0,255))
+             FlagData[TheFlag+3]:setColor(Color(0,0,255))
+             FlagData[TheFlag+4]:setColor(Color(0,0,255))
+             FlagData[TheFlag+5]:setColor(Color(0,0,255))
+             FlagData[TheFlag+6] = (Color(0,0,255))
+             IsFlagBlue = 1
+        end
+   
+    end
+    
+    if FlagData[TheFlag+8] == 10 then
+             FlagData[TheFlag]:setColor(Color(255,0,0))
+             FlagData[TheFlag+0]:setColor(Color(255,0,0))
+             FlagData[TheFlag+1]:setColor(Color(255,0,0))
+             FlagData[TheFlag+2]:setColor(Color(255,0,0))
+             FlagData[TheFlag+3]:setColor(Color(255,0,0))
+             FlagData[TheFlag+4]:setColor(Color(255,0,0))
+             FlagData[TheFlag+5]:setColor(Color(255,0,0))
+             FlagData[TheFlag+6] = (Color(255,0,0))
+             FlagData[TheFlag+7] = 1
+             FlagData[TheFlag+8] = 0
+             if IsFlagBlue >= 1 then
+                Blueflags = Blueflags - 1
+            end
+             Redflags = Redflags + 1
+        
+    else
+        FlagData[TheFlag+8] = FlagData[TheFlag+8] + 1
+        
+        
+    end
+    
+end
+
+function FlagCapBlue(TheFlag)
+        local IsFlagRed = 0
+        if FlagData[TheFlag + 7] == 0 then
+        --print(FlagData[TheFlag+7])
+        if FlagData[TheFlag+6] == Color(255,255,255) then
+             FlagData[TheFlag]:setColor(Color(0,0,255))
+             FlagData[TheFlag+0]:setColor(Color(0,0,255))
+             FlagData[TheFlag+1]:setColor(Color(0,0,255))
+             FlagData[TheFlag+2]:setColor(Color(0,0,255))
+             FlagData[TheFlag+3]:setColor(Color(0,0,255))
+             FlagData[TheFlag+4]:setColor(Color(0,0,255))
+             FlagData[TheFlag+5]:setColor(Color(0,0,255))
+             FlagData[TheFlag+6] = (Color(0,0,255))
+        
+        
+        else
+             FlagData[TheFlag]:setColor(Color(0,0,255))
+             FlagData[TheFlag+0]:setColor(Color(255,255,255))
+             FlagData[TheFlag+1]:setColor(Color(255,255,255))
+             FlagData[TheFlag+2]:setColor(Color(255,255,255))
+             FlagData[TheFlag+3]:setColor(Color(255,255,255))
+             FlagData[TheFlag+4]:setColor(Color(255,255,255))
+             FlagData[TheFlag+5]:setColor(Color(255,255,255))
+             FlagData[TheFlag+6] = (Color(255,255,255))
+        end
+
+    end
+    
+    if FlagData[TheFlag + 7] == 1 then
+
+        if FlagData[TheFlag+6] == Color(255,0,0) then
+             FlagData[TheFlag]:setColor(Color(0,0,255))
+             FlagData[TheFlag+0]:setColor(Color(0,0,255))
+             FlagData[TheFlag+1]:setColor(Color(0,0,255))
+             FlagData[TheFlag+2]:setColor(Color(0,0,255))
+             FlagData[TheFlag+3]:setColor(Color(0,0,255))
+             FlagData[TheFlag+4]:setColor(Color(0,0,255))
+             FlagData[TheFlag+5]:setColor(Color(0,0,255))
+             FlagData[TheFlag+6] = (Color(0,0,255))
+             IsFlagRed = 1
+        
+        else
+             FlagData[TheFlag]:setColor(Color(0,0,255))
+             FlagData[TheFlag+0]:setColor(Color(255,0,0))
+             FlagData[TheFlag+1]:setColor(Color(255,0,0))
+             FlagData[TheFlag+2]:setColor(Color(255,0,0))
+             FlagData[TheFlag+3]:setColor(Color(255,0,0))
+             FlagData[TheFlag+4]:setColor(Color(255,0,0))
+             FlagData[TheFlag+5]:setColor(Color(255,0,0))
+             FlagData[TheFlag+6] = (Color(255,0,0))
+             IsFlagRed = 1
+        end
+   
+    end
+    
+    if FlagData[TheFlag+8] == 10 then
+             FlagData[TheFlag]:setColor(Color(0,0,255))
+             FlagData[TheFlag+0]:setColor(Color(0,0,255))
+             FlagData[TheFlag+1]:setColor(Color(0,0,255))
+             FlagData[TheFlag+2]:setColor(Color(0,0,255))
+             FlagData[TheFlag+3]:setColor(Color(0,0,255))
+             FlagData[TheFlag+4]:setColor(Color(0,0,255))
+             FlagData[TheFlag+5]:setColor(Color(0,0,255))
+             FlagData[TheFlag+6] = (Color(0,0,255))
+             FlagData[TheFlag+7] = 2
+             FlagData[TheFlag+8] = 0
+            if IsFlagRed >= 1 then
+                Redflags = Redflags - 1
+            end
+             Blueflags = Blueflags + 1
+        
+    else
+        FlagData[TheFlag+8] = FlagData[TheFlag+8] + 1
+        
+        
+    end
+   
+end
+--if no one is at a flag and its cap time is > 0 then it sets it to 0 and the color back if it had color
+--also, it checks if their are people on it and sets team colors back to normal. Should not do anything if two teams are on it
+function BlinkChecker()
+    if table.count(FlagData) > 0 then
+        local Bint = 1
+        while Bint <= table.count(FlagData) do
+            if FlagData[Bint + 8] > 0 then
+                local Ptable2 = find.inBox(FlagData[Bint]:getPos() - Vector(300,300,600), FlagData[Bint]:getPos() - Vector(-300,-300,-600),function(PlayerF) return PlayerF and PlayerF:isPlayer() and table.hasValue(RedPlayers,PlayerF) or table.hasValue(BluePlayers,PlayerF) end )
+                if table.count(Ptable2) == 0 then
+                    FlagData[Bint+8] = 0
+                    FlagColorNorm(Bint)
+                else
+                    local Ploop = 1
+                    local RdudesB = 0
+                    local BdudesB = 0
+                    while Ploop < table.count(Ptable2) do
+                        if table.hasValue(RedPlayers, Ptable2[Ploop]) == true then
+                            RdudesB = RdudesB + 1
+                        end
+                        if table.hasValue(BluePlayers, Ptable2[Ploop]) == true then
+                            BdudesB = BdudesB + 1
+                        end
+                        Ploop = Ploop + 1
+                    end
+                    if RdudesB > 0 and BdudesB == 0 and FlagData[Bint+7] == 1 then
+                        FlagData[Bint+8] = 0                        
+                        FlagColorNorm(Bint)
+                    else
+                        if BdudesB > 0 and RdudesB == 0 and FlagData[Bint+7] == 2 then
+                            FlagData[Bint+8] = 0
+                            FlagColorNorm(Bint)
+                        end
+                        
+                    end
+                    
+                    
+                end
+            end
+            Bint = Bint + 9
+             
+        end
+    end
+end
+
+--The function that sets color back
+--called from above
+function FlagColorNorm(Flaglo)
+    if FlagData[Flaglo+7] == 0 then
+        FlagData[Flaglo]:setColor(Color(255,255,255))
+        FlagData[Flaglo+0]:setColor(Color(255,255,255))
+        FlagData[Flaglo+1]:setColor(Color(255,255,255))
+        FlagData[Flaglo+2]:setColor(Color(255,255,255))
+        FlagData[Flaglo+3]:setColor(Color(255,255,255))
+        FlagData[Flaglo+4]:setColor(Color(255,255,255))
+        FlagData[Flaglo+5]:setColor(Color(255,255,255))
+        FlagData[Flaglo+6] = (Color(255,255,255))
+        
+    else
+        if FlagData[Flaglo+7] == 1 then
+            FlagData[Flaglo]:setColor(Color(255,0,0))
+            FlagData[Flaglo+0]:setColor(Color(255,0,0))
+            FlagData[Flaglo+1]:setColor(Color(255,0,0))
+            FlagData[Flaglo+2]:setColor(Color(255,0,0))
+            FlagData[Flaglo+3]:setColor(Color(255,0,0))
+            FlagData[Flaglo+4]:setColor(Color(255,0,0))
+            FlagData[Flaglo+5]:setColor(Color(255,0,0))
+            FlagData[Flaglo+6] = (Color(255,0,0))
+        else
+            if FlagData[Flaglo+7] == 2 then
+                FlagData[Flaglo]:setColor(Color(0,0,255))
+                FlagData[Flaglo+0]:setColor(Color(0,0,255))
+                FlagData[Flaglo+1]:setColor(Color(0,0,255))
+                FlagData[Flaglo+2]:setColor(Color(0,0,255))
+                FlagData[Flaglo+3]:setColor(Color(0,0,255))
+                FlagData[Flaglo+4]:setColor(Color(0,0,255))
+                FlagData[Flaglo+5]:setColor(Color(0,0,255))
+               FlagData[Flaglo+6] = (Color(0,0,255))                
+            end
+            
+        end
+        
+    end
+    
+end
+--Removes tickets based on diffrence also sends playMusic message to clients
+function FlagTickets()
+    if Redflags > Blueflags then
+        local FlagDiffR = Redflags - Blueflags
+        TicketsB = TicketsB - FlagDiffR
+      
+        net.start("BlueTickets")
+        net.writeFloat(TicketsB)
+        net.send()
+    else
+        if Blueflags > Redflags then
+          local FlagDiffB = Blueflags - Redflags
+          TicketsR = TicketsR - FlagDiffB
+            
+          net.start("RedTickets")
+          net.writeFloat(TicketsR)
+          net.send()       
+        end
+        
+    end
+end
+
+--Makes the flag
+--Adds 9 items to table
+--MainFlagModel,SecondFlagModel,Letter,Letter,Letter,Letter,Color,Team,CapLevel
+--Team,0 for uncap/non,1 for red,2 for blue
+function FlagGen(Pvec)
+    local FlagHolo = holograms.create(Pvec+Vector(0,0,600), Angle(180,0,0), "models/sprops/misc/pyramids/rsize_4/rpyr_48x60.mdl", Vector(3))
+    --FlagHolo:setColor(DefColor)
+    FlagHolo:setMaterial("phoenix_storms/mrref2")
+    local FlagHoloPole = holograms.create(Pvec+Vector(0,0,600), Angle(180,0,0), "models/sprops/cylinders/size_5/cylinder_12x480.mdl", Vector(3))
+    FlagHoloPole:setMaterial("phoenix_storms/mrref2")
+    FlagHoloPole:setSize(Vector(50,50,20000))
+    --FlagHolo:setColor(DefColor)
+    --table.insert(FlagData,FlagHolo)
+    
+    local TextModel = "models/sprops/misc/alphanum/alphanum_a.mdl"
+    local TextModelM = string.setChar(TextModel, 38, string.char(97+FlagCount))
+    
+    local TextHolo1 = holograms.create(Pvec+Vector(0,-80,540), Angle(0,180,0),TextModelM , Vector(7))
+    local TextHolo2 = holograms.create(Pvec+Vector(0,80,540), Angle(0,0,0),TextModelM , Vector(7))
+    local TextHolo3 = holograms.create(Pvec+Vector(80,0,540), Angle(0,-90,0),TextModelM , Vector(7))
+    local TextHolo4 = holograms.create(Pvec+Vector(-80,0,540), Angle(0,90,0),TextModelM , Vector(7))
+    TextHolo1:setMaterial("phoenix_storms/pro_gear_top2")
+    TextHolo2:setMaterial("phoenix_storms/pro_gear_top2")
+    TextHolo3:setMaterial("phoenix_storms/pro_gear_top2")
+    TextHolo4:setMaterial("phoenix_storms/pro_gear_top2")
+    
+    table.insert(FlagData,FlagHolo)
+    table.insert(FlagData,FlagHoloPole)
+    table.insert(FlagData,TextHolo1)
+    table.insert(FlagData,TextHolo2)
+    table.insert(FlagData,TextHolo3)
+    table.insert(FlagData,TextHolo4)
+    table.insert(FlagData,Color(255,255,255))
+    table.insert(FlagData,0)
+    table.insert(FlagData,0)
+    --print(Color(255,255,255))
+    
+    FlagCount = FlagCount + 1
+
+end
+--Sends flag data to client for processing
+function FlagDsend()
+    net.start("Fdata")
+    net.writeTable(FlagData)
+    net.send()
+end
+
+
+--Timers for logic n stuff
+timer.create("FlagCapping", 1, 0, FlagIsCapping)
+timer.create("BlinkCheker", 2, 0, BlinkChecker)
+timer.create("TicketRemover", 5, 0, FlagTickets)
+timer.create("FlagData", 1, 0, FlagDsend)
+
+end
+
+
+if CLIENT then
+
+
+hook.add("hudconnected","ClientHudConnect",function()
+    IamRed = 0
+    IamBlue = 0
+    GotTeam = 0
+    MainFont = render.createFont("Arial",64)
+    FlagFont = render.createFont("Arial",32)
+    setupPermissionRequest({"bass.loadURL"}, "Lets the Chip play music", true)
+    MusicLink = "https://cdn.discordapp.com/attachments/1006725467606364170/1279951870143500380/Tanc_a_lelek.mp3?ex=66d8f292&is=66d7a112&hm=d4c4cf9f9c08d474fc12787b4b3fb659728a9ee9463d56ce7d903872ec6b783a&"
+    --CanMusic = 0
+end)
+--       NETSTART
+net.receive("HudRdata", function()
+    HudR = net.readEntity()
+
+end)
+
+net.receive("HudBdata", function()
+    HudB = net.readEntity()
+
+end)
+
+net.receive("RedData", function()
+    RedPlayers = net.readTable()
+    
+
+end)
+
+net.receive("BlueData", function()
+    BluePlayers = net.readTable()
+
+
+end)
+
+net.receive("RedTickets", function()
+    TicketsR = net.readFloat()
+    
+
+end)
+
+net.receive("BlueTickets", function()
+    TicketsB = net.readFloat()   
+
+end)
+
+net.receive("TeamRname", function()
+    TeamRedName = net.readString() 
+
+end)
+
+net.receive("TeamBname", function()
+    TeamBlueName = net.readString()
+end)
+
+
+net.receive("Fdata", function()
+    FlagData = net.readTable()
+end)
+
+
+net.receive("MusicPlay", function()
+    PlayMusic()
+end)
+
+--hook.add("net","RunNetstuff",function(Ename)
+    
+--end)
+
+--       NETEND
+
+
+
+
+--Plays music
+function PlayMusic()
+    if render.isHUDActive() == true then
+            if  hasPermission("bass.loadURL", url) then
+        --local sou
+        bass.loadURL(MusicLink, "3d noblock", function(sou, err, errtxt)
+            --This is gay
+            sou:setVolume(0.4)
+            hook.add("tick", "TI", function()
+                sou:setPos(player():getPos())
+            end)
+            
+        end)
+  
+
+    end
+end
+end
+
+
+-- Gets peoples Resolution so hud does not look bad(Seems to be bugged so hud is now basic)
+hook.add("predrawhud","PreDraw",function()
+    scrW, scrH = render.getGameResolution()   
+    ResX = scrW/2
+    ResY = scrH/2
+         --x = chip():getPos():toScreen().x
+         --y = chip():getPos():toScreen().y
+
+    if GotTeam == 0 then
+        GetTeam()
+    end
+end)
+
+--Draws hud for all teams and starts function for team hud drawing by functions
+--Very bad rn due to Resolution not working
+hook.add("drawhud","HudMain",function()
+    render.setFont(MainFont)   
+    --Score/ticket hud
+
+    render.setColor(Color(255,255,255))
+    render.drawLine(0,120,140,120)
+    --TeamRed
+    render.setColor(Color(255,0,0))
+    render.drawText(0,0, TeamRedName)
+    render.drawText(45,60, TicketsR,1)
+    --TeamBlue
+    render.setColor(Color(0,0,255))
+    render.drawText(0,120, TeamBlueName)
+    render.drawText(45,180, TicketsB,1)
+        
+    render.setColor(Color(255,255,255))
+    
+    local FlagI = 1
+    --This is faster then getting the name of the model, might have to due that tho
+    local FlagLetter = 0
+    --This puts cap time and FlagLetter on the flag
+    while FlagI < table.count(FlagData) do
+            render.setFont(FlagFont)  
+            render.setColor(FlagData[FlagI]:getColor())
+            x = FlagData[FlagI]:getPos():toScreen().x
+            y = FlagData[FlagI]:getPos():toScreen().y
+            render.drawCircle(x,y,20)
+            render.drawText(x, y - 15,string.char(65+FlagLetter),1)
+            render.drawText(x + 60, y + 10,"Cap% " .. FlagData[FlagI+8]*10,1)
+            FlagLetter = FlagLetter + 1
+            FlagI = FlagI + 9
+            
+        
+    end
+    
+    --render.selectRenderTarget("Main")
+    --render.draw3DQuadEasy(chip():getPos(), Vector(100,1,1), 900, 900)   
+    --render.draw3DLine(chip():getPos(),chip():getPos() + 100)
+
+    drawTOteamHud()
+    
+ 
+end)
+--Unused 3d stuff
+hook.add("render","HudS",function()
+    --print("Test")
+    --render.draw3DQuadEasy(chip():getPos(), Vector(1,1,1), 100, 100)    
+end)
+
+
+
+--Gets the team for the drwaToteamHud function
+function GetTeam()
+    local MI = 0
+    while MI < table.count(RedPlayers) do
+        MI = MI + 1
+        if(player() == RedPlayers[MI]) then
+            IamRed = 1
+        end
+    end
+
+    local MI = 0
+    while MI < table.count(BluePlayers) do
+        MI = MI + 1
+        if(player() == BluePlayers[MI]) then
+            IamBlue = 1
+        end
+    end
+    
+    GotTeam = 1
+end
+
+--Draws team hud elements for things like pos of team members that
+--the other team should not see
+function drawTOteamHud()
+
+    if IamRed == 1 then
+        local RdudeIter = 0
+        while RdudeIter < table.count(RedPlayers) do
+            RdudeIter = RdudeIter + 1
+            if RedPlayers[RdudeIter] == player() then
+                
+            else
+                render.setColor(Color(255,0,0))
+                x = RedPlayers[RdudeIter]:getPos():toScreen().x
+                y = RedPlayers[RdudeIter]:getPos():toScreen().y
+                render.drawFilledCircle(x,y,10)
+            end
+
+        end
+        
+    end
+    
+    if IamBlue == 1 then
+        
+        local BdudeIter = 0
+        while BdudeIter < table.count(BluePlayers) do
+            BdudeIter = BdudeIter + 1
+            if BluePlayers[BdudeIter] == player() then
+                
+            else
+                render.setColor(Color(0,0,255))
+                x = BluePlayers[BdudeIter]:getPos():toScreen().x
+                y = BluePlayers[BdudeIter]:getPos():toScreen().y
+                render.drawFilledCircle(x,y,10)
+            end
+
+        end
+        
+    end
+end  
+
+end
