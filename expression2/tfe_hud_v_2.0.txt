@@ -1,0 +1,210 @@
+@name TFE HUD V 2.0
+@inputs [GunW]:wirelink [EGP]:wirelink Base:entity [Components]:array Active Cam:wirelink Chair:entity GunS:entity Speed:number #LEAS:entity
+@persist [CrosshairColor, PointerColor]:vector [Res, ScreenRes]:vector2 [Gun]:entity Cam:wirelink BaseSize:vector2 BaseLocation:vector2 ComponentsStored:array TotalCount TotalCount2 NewCount TankReadoutAngle IsTilted TextXoffset TextYoffset
+
+##A Hud made for friends that uses some elements from duh hud because friends like that hud.
+##Also contains a fully custom Component readout for things like engines and ammo
+##Now retired due to a more advanced hud.
+
+
+## Change till the boxes match
+TankReadoutAngle = 0
+## for your funny tilted tamper prop
+IsTilted = 0
+##Text offsets because
+TextXoffset = 150
+TextYoffset = 80
+##For when you cant see ze base
+BaseLocation =  vec2(-1000,400)
+
+if(first()|dupefinished()){  
+CrosshairColor = vec(255,0,0)
+PointerColor = vec(255,0,0)
+Gun = GunW["Entity",entity]
+
+rangerPersist(1)
+}
+if(~Active){
+EGP:egpClear()
+ScreenRes=egpScrSize(Chair:driver())
+Res=ScreenRes/2
+if (IsTilted == 1){
+BaseSize = vec2(Base:boxSize():y(),Base:boxSize():z())        
+}
+else{
+BaseSize = vec2(Base:boxSize():y(),Base:boxSize():x())    
+}
+
+        EGP:egpLine(10,Res+vec2(350,-150),Res+vec2(350,150))
+        EGP:egpLine(11,Res+vec2(350,150),Res+vec2(150,250))
+        EGP:egpLine(12,Res+vec2(350,-150),Res+vec2(150,-200))
+        
+        EGP:egpLine(13,Res+vec2(-350,-150),Res+vec2(-350,150))
+        EGP:egpLine(14,Res+vec2(-350,150),Res+vec2(-150,250))
+        EGP:egpLine(15,Res+vec2(-350,-150),Res+vec2(-150,-200))
+        
+        EGP:egpLine(16,Res+vec2(350,0),Res+vec2(50,0))
+        EGP:egpLine(17,Res+vec2(-350,0),Res+vec2(-50,0))
+        EGP:egpLine(18,Res+vec2(-50,0),Res+vec2(0,-50))
+        EGP:egpLine(19,Res+vec2(50,0),Res+vec2(0,-50))
+        EGP:egpLine(20,Res+vec2(-50,0),Res+vec2(0,50))
+        EGP:egpLine(21,Res+vec2(50,0),Res+vec2(0,50))
+        
+        EGP:egpBoxOutline(22,Res+vec2(0,0),vec2(2,100))
+        EGP:egpLine(23,Res+vec2(25,0),Res+vec2(-25,0))
+        EGP:egpText(24,"Reload",Res+vec2(200,-50))
+        EGP:egpText(25,"Time",Res+vec2(200,-30))
+  #      EGP:egpBoxOutline(999,Res+vec2(0,0),+vec2(400,400))
+        EGP:egpText(40,"Target Armor",Res+vec2(200,0))
+        EGP:egpText(41,"Primary ammo",Res+vec2(-300,-50))
+        EGP:egpText(42,"Secondary ammo",Res+vec2(-300,-30))
+        EGP:egpText(43,"Speed",Res+vec2(-300,10))
+        EGP:egpBoxOutline(44,Res+BaseLocation,BaseSize)
+        EGP:egpBox(45,Res+BaseLocation,BaseSize + 50)
+        Count = 0
+        #Wheels[I,entity]:pos()
+        ComponentsStored = array()
+        ComponentsStored:clear()
+        ComponentsStored = Components
+        ADDN = 0
+        TotalCount = 0
+        TotalCount2 = 0
+        while (Count < ComponentsStored:count()){
+            Count = Count + 1
+            TotalCount = TotalCount + 1
+            Llocation = vec2(Base:toLocal(ComponentsStored[Count,entity]:pos()):y(),Base:toLocal(ComponentsStored[Count,entity]:pos()):x())
+            EGP:egpBox(200+TotalCount,Res+(BaseLocation+Llocation),vec2(ComponentsStored[Count,entity]:boxSize():y(),ComponentsStored[Count,entity]:boxSize():x()))
+            EGP:egpAngle(200+TotalCount,TankReadoutAngle)
+        
+    }
+    Count = 0
+    NewCount = TotalCount + 200
+        while (Count < ComponentsStored:count()){
+            Count = Count + 1
+            TotalCount2 = TotalCount2 + 1
+            ADDN = ADDN + 20
+            EGP:egpText(NewCount+TotalCount2,ComponentsStored[Count,entity]:acfNameShort() + " " + ComponentsStored[Count,entity]:acfPropHealthPercent() * 100 + "%",Res+(vec2(BaseLocation:x() + BaseSize:x() + TextXoffset,(BaseLocation:y() - BaseSize:y() + TextYoffset ) + ADDN)))
+            EGP:egpColor(NewCount+TotalCount2,CrosshairColor)
+        
+    }
+    Count = 0
+    
+
+    
+    
+        #print(SuperArray:count())
+     
+    
+        EGP:egpColor(1,CrosshairColor)
+        EGP:egpColor(2,CrosshairColor)
+        EGP:egpColor(3,CrosshairColor)
+        EGP:egpColor(3,CrosshairColor)
+        EGP:egpColor(4,CrosshairColor)
+        EGP:egpColor(5,CrosshairColor)
+        EGP:egpColor(6,CrosshairColor)
+        EGP:egpColor(7,CrosshairColor)
+        EGP:egpColor(8,CrosshairColor)
+        EGP:egpColor(9,CrosshairColor)
+        EGP:egpColor(10,CrosshairColor)
+        EGP:egpColor(11,CrosshairColor)
+        EGP:egpColor(12,CrosshairColor)
+        EGP:egpColor(13,CrosshairColor)
+        EGP:egpColor(14,CrosshairColor)
+        EGP:egpColor(15,CrosshairColor)
+        EGP:egpColor(16,CrosshairColor)
+        EGP:egpColor(17,CrosshairColor)
+        EGP:egpColor(18,CrosshairColor)
+        EGP:egpColor(19,CrosshairColor)
+        EGP:egpColor(20,CrosshairColor)
+        EGP:egpColor(21,CrosshairColor)
+        EGP:egpColor(22,CrosshairColor)
+        EGP:egpColor(23,CrosshairColor)
+        EGP:egpColor(24,CrosshairColor)
+        EGP:egpColor(25,CrosshairColor)
+        EGP:egpColor(26,CrosshairColor)
+        EGP:egpColor(27,CrosshairColor)
+        EGP:egpColor(28,CrosshairColor)
+        EGP:egpColor(29,CrosshairColor)
+        EGP:egpColor(30,CrosshairColor)
+        EGP:egpColor(31,CrosshairColor)
+#        EGP:egpColor(999,CrosshairColor)     
+        EGP:egpColor(40,CrosshairColor)
+        EGP:egpColor(41,CrosshairColor)              
+        EGP:egpColor(42,CrosshairColor)    
+        EGP:egpColor(43,CrosshairColor)
+        EGP:egpColor(44,CrosshairColor)
+        EGP:egpColor(45,50,50,50,150)            
+     
+    holoCreate(1,vec())
+    holoScaleUnits(1,vec())
+    holoAlpha(1,0)
+    
+    EGP:egpBox(1,vec2(),vec2())
+    EGP:egpCircleOutline(2,vec2(),vec2(5,5))
+    EGP:egpCircleOutline(200,vec2(),vec2(20,20))
+    EGP:egpParent(2,1)
+    EGP:egpParent(200,1)
+    EGP:egp3DTracker(1,holoEntity(1):pos())
+    EGP:egpParent(1,holoEntity(1))
+    EGP:egpColor(2,vec(255,0,0))
+ #   EGP:egp3DTracker(998,Target:pos())
+    EGP:egpColor(200,PointerColor)
+
+    
+    EGP:egpLine(3,Res+vec2(2,2+7),Res+vec2(2,7))
+    EGP:egpLine(4,Res+vec2(2+7,2),Res+vec2(2-7,2))
+    
+    rangerFilter(Gun)
+    rangerPersist(1)
+    rangerFilter(entity():getConnectedEntities())
+    
+    
+ timer("tick",500)
+}
+
+    
+if(clk("tick") && Active == 1){
+Reload = Gun:acfReloadProgress()
+Reload = Reload * 100
+Reload = round(Reload,1)
+AR=Cam["Trace",ranger]:acfEffectiveArmor()
+#EGP:egpPos(998, Target:pos())
+if(Reload == 100){
+    EGP:egpSetText(25,"Time: " + "Ready")
+}
+else{
+    EGP:egpSetText(25,"Time: " + toString(Reload))
+
+}
+EGP:egpSetText(40,"Target Armor: " + toString(AR))
+
+EGP:egpSetText(41,"Primary Ammo: " + toString(Gun:acfAmmoCount()))
+EGP:egpSetText(42,"Secondary Ammo: " + toString(GunS:acfAmmoCount()))
+EGP:egpSetText(43,"Speed: " + toString(round(Speed)) + " KPH")
+
+while (Count < ComponentsStored:count()){
+    Count = Count + 1
+    ADDN = ADDN + 20
+    EGP:egpSetText(NewCount+Count,ComponentsStored[Count,entity]:acfNameShort() + " " + ComponentsStored[Count,entity]:acfPropHealthPercent() * 100 + "%")
+    if(ComponentsStored[Count,entity]:acfPropHealthPercent() == 0){
+        EGP:egpSetText(NewCount+Count,ComponentsStored[Count,entity]:acfNameShort() + " " + "SkillIssue")
+    }
+    else{
+        EGP:egpSetText(NewCount+Count,ComponentsStored[Count,entity]:acfNameShort() + " " + ComponentsStored[Count,entity]:acfPropHealthPercent() * 100 + "%")
+
+    }
+    Heath = ComponentsStored[Count,entity]:acfPropHealthPercent() * 100
+    EGP:egpColor(200+Count,100-Heath,0,Heath,255)
+        
+}
+
+
+
+
+holoPos(1,rangerOffset(9999999999,Gun:pos()+Gun:forward()*100,Gun:forward()):position())
+ timer("tick",100)
+    }
+
+
+
+
