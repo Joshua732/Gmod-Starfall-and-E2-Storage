@@ -30,8 +30,8 @@ if SERVER then
 --Constraint hell beyond this point
     constraint.setConstraintClean(false)
     wire.adjustInputs({"Base","Prop"}, {"entity","entity"})
-    if isValid(wire.ports.Base) then 
-        constraint.breakAll(wire.ports.Base)
+    if isValid(wire.ports.Prop) then 
+        constraint.breakAll(wire.ports.Prop)
         --This BackwardsConstraint keeps it with the bp
         constraint.rope(1, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(Backwards * BackwardLenthMuti)), Vector(0,0,0), 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
         --CenterConstrants
