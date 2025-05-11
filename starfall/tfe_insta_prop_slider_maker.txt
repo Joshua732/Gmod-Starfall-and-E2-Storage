@@ -1,0 +1,50 @@
+--@name TFE Insta Prop slider maker
+--@author Joshua732
+--@shared
+
+if SERVER then
+    --Notes on how to use
+    --ToDo, add notes on how to use this fully for people who do not understand rope props
+    --Set to 0 to hide
+    RopeSIZE = 5
+    --Change these to match the forwards/backwards of your prop
+    Forwards = Vector(1,0,0)
+    Backwards = Vector(-1,0,0)
+    --lenths for F/B
+    ForwardLenthMuti = 100
+    BackwardLenthMuti = 100
+    --Center front/bottom, change to match
+    CentUp = Vector(1,0,2)
+    CentDowm = Vector(1,0,-2)
+    --Center lenths muti
+    CentUpLenth = 100
+    CentDowmLenth = 100
+    --FrontAndBackOffsets This is for making the ropes go down/topright/topleft
+    OffsetBottom = Vector(0,0,-1)
+    OffsetTopLeft = Vector(-1,0,1)
+    OffsetTopRight = Vector(1,0,1)
+    --ForwardLenths
+    FLenthMuti = 100
+    --BackLenths
+    BLenthMuti = 100
+--Constraint hell beyond this point
+    constraint.setConstraintClean(false)
+    wire.adjustInputs({"Base","Prop"}, {"entity","entity"})
+    if isValid(wire.ports.Base) then 
+        constraint.breakAll(wire.ports.Base)
+        --This BackwardsConstraint keeps it with the bp
+        constraint.rope(1, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(Backwards * BackwardLenthMuti)), Vector(0,0,0), 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
+        --CenterConstrants
+        constraint.rope(2, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(CentUp * CentUpLenth)), Vector(0,0,0), 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
+        constraint.rope(3, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(CentDowm * CentDowmLenth)), Vector(0,0,0), 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
+        --FrontConstrants
+        constraint.rope(4, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(-Forwards * wire.ports.Prop:getModelBounds()[1]) + (OffsetBottom * FLenthMuti) ), -Forwards * wire.ports.Prop:getModelBounds()[1], 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
+        constraint.rope(5, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(-Forwards * wire.ports.Prop:getModelBounds()[1]) + (OffsetTopLeft * FLenthMuti) ), -Forwards * wire.ports.Prop:getModelBounds()[1], 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
+        constraint.rope(6, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(-Forwards * wire.ports.Prop:getModelBounds()[1]) + (OffsetTopRight * FLenthMuti) ), -Forwards * wire.ports.Prop:getModelBounds()[1], 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
+        --BackConstrants
+        constraint.rope(7, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(-Backwards * wire.ports.Prop:getModelBounds()[1]) + (OffsetBottom * BLenthMuti) ), -Backwards * wire.ports.Prop:getModelBounds()[1], 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
+        constraint.rope(8, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(-Backwards * wire.ports.Prop:getModelBounds()[1]) + (OffsetTopLeft * BLenthMuti) ), -Backwards * wire.ports.Prop:getModelBounds()[1], 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
+        constraint.rope(9, wire.ports.Base, wire.ports.Prop,0,0,wire.ports.Base:worldToLocal(wire.ports.Prop:localToWorld(-Backwards * wire.ports.Prop:getModelBounds()[1]) + (OffsetTopRight * BLenthMuti) ), -Backwards * wire.ports.Prop:getModelBounds()[1], 0 ,0, 0, RopeSIZE, "cable/rope", 1, Color(255,0,0))
+
+    end
+end
