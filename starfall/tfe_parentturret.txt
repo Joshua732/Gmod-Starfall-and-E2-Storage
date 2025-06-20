@@ -1,0 +1,32 @@
+--@name TFE ParentTurret
+--@author Joshua732
+--@server
+--Simple TFE parent turret meant to mimic acf3 ent turrets Somewhat
+if SERVER then
+    wire.adjustInputs({"Hdrive","Vdrive","Base","TargetVector","Active"}, {"entity","entity","entity","Vector","number"})
+    --Set to make the Hdrive not flip, this is set up for cylinders
+    HDriveRoll = 0
+    --How fast the chip goes
+    UpdateSpeed = 0
+    DepressionMax = 45
+    ElevationMax = -45
+    VDriveSpeed = 1
+    HDriveSpeed = 1
+    function Main()
+            if wire.ports.Active == 1 then
+                
+                local HDriveDirection = wire.ports.Base:worldToLocalAngles((wire.ports.TargetVector - wire.ports.Hdrive:getMassCenterW()):getAngle())
+                HDriveDirection.yaw =  math.normalizeAngle(HDriveDirection.yaw)
+                local HDrivePointAt = math.approachAngle(wire.ports.Hdrive:getLocalAngles().yaw, HDriveDirection.yaw , HDriveSpeed)
+                wire.ports.Hdrive:setAngles(wire.ports.Base:localToWorldAngles(Angle(0,HDrivePointAt ,HDriveRoll)))
+                
+                local VDriveDirection = wire.ports.Base:worldToLocalAngles((wire.ports.TargetVector - wire.ports.Vdrive:getMassCenterW()):getAngle())
+                 VDriveDirection.pitch = math.normalizeAngle(VDriveDirection.pitch)
+                local VDrivePointAt = math.approachAngle(wire.ports.Vdrive:getLocalAngles().pitch, VDriveDirection.pitch , VDriveSpeed)
+                VDrivePointAt = math.clamp(VDrivePointAt, ElevationMax, DepressionMax)
+                wire.ports.Vdrive:setAngles(wire.ports.Hdrive:localToWorldAngles(Angle(VDrivePointAt,0,HDriveRoll)))
+                
+            end
+    end
+    timer.create("Main", UpdateSpeed, 0, Main)
+end
