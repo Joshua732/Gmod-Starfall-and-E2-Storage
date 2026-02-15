@@ -1,0 +1,48 @@
+--@name Foenta Industries Anti Crash System
+--@author Joshua732
+--@server
+--Oh yes, Death to lag or small map size is !fun. This chip turns !fun to fun -- TFE SPESSSSSSSSSMAN who loves fun
+--Just wire this up to da baseplate and change some setting and this should stop you from commiting team rocket when you lag
+--Totaly not stolen from an ultra advanced aircraft
+--It does not fully stop you from ramming into things on purpose but it can and it does its best
+--chip starts on but you can turn it off with the toggle because chip makes craft hate the ground
+--BEWARE OF TREE
+--The chip is fully auto and adjust to your current speed
+--Keep it simple and stupid
+if SERVER then
+--Why Do I need this
+    function B2N(value)
+        return value and 1 or 0
+    end
+    wire.adjustInputs({"Base","Toggle"}, {"entity","number"})
+    ToggleBreak = 1
+    --SETTINGS
+    --How powerful is the crash prevent. Might kill you with Gforce if its too high
+    EmergencyAirBreakPower = 20
+    --This will makes it look further ahead to see if ye will crash. It just * the current lookahead that is based on your vel
+    --Example 2 means that it will look double the vel ahead. You should touch EmergencyAirBreakPower first before touching this as the system is dynamic
+    ExtraLookAhead = 1
+    Interval = 0
+    --SETTINGS
+    function Main()
+        if ToggleBreak == 1 then
+        local AntiCrashTrace = trace.line(wire.ports.Base:getPos(), wire.ports.Base:getPos() + (wire.ports.Base:getVelocity() * ExtraLookAhead), TableToFilter, nil,20, false)
+        wire.ports.Base:applyForceCenter((-wire.ports.Base:getVelocity() * B2N(AntiCrashTrace.HitWorld) * wire.ports.Base:getMass()) / (math.clamp(AntiCrashTrace.StartPos:getDistance(AntiCrashTrace.HitPos),1,math.huge) / EmergencyAirBreakPower))
+        end
+    end
+    if wire.ports.Base:isValid() then
+        TableToFilter = wire.ports.Base:getChildren()
+        TableToFilter = table.clearKeys(TableToFilter)
+        table.insert(TableToFilter,wire.ports.Base)
+        timer.create("Main", Interval, 0,Main)
+    end
+    hook.add("Input","Input",function(Input,Value)
+        if Input == "Toggle" && Value == 1 then
+            if ToggleBreak == 1 then
+                ToggleBreak = 0
+            else
+                ToggleBreak = 1
+            end
+        end
+    end)
+end
