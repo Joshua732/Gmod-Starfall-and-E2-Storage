@@ -1,0 +1,1807 @@
+--@name TFE Vertex Forge V1.4.6 Editable Position Snap
+--@author Joshua732
+--@shared
+--
+-- V1.4.6: Snap can be typed (0.5 to 64) as well as stepped with -/+ buttons.
+-- Step sequence includes 5, so reducing to 0.5 never traps it at 4 or 8.
+-- Position snap remains independent of ANGLE SNAP.
+-- V1.4.5: Fit editor text within right panel, shorten captions and truncate
+-- long custom shape/group names before rendering; no changes to rendering path.
+-- V1.4.4: Editable group visibility toggles (hidden groups consume no preview
+-- geometry or point drawing), plus INCLUDE / EXCLUDE HIDDEN assembly option.
+-- Cached preview/model counts avoid serializing every group every HUD frame.
+-- Library saves visibility alongside geometry, and old library files load.
+-- H and chat bindings no longer interfere with typing library names.
+-- V1.4.3: Fix LuaJIT 60-upvalue overflow by extracting the library UI page
+-- from drawUI. Hide basic GMod HUD while editor visible. Temporarily turn
+-- off toolgun hints using gmod_drawhelp and restore default on hiding editor.
+-- If the chip is removed while editing, use console: gmod_drawhelp 1
+-- V1.4.2: Save/load custom editable groups to clientside sf_filedata/VertexForgeGroups.
+-- Library includes a selected convex or the entire authored multi-group shape.
+-- Loading appends independent editable groups; an untouched starter is replaced.
+-- Starfall file API uses .txt files and a versioned, human-readable format.
+-- V1.4.1: Detach a generated Mirror Y copy into its own editable group.
+-- Flip a selected group on X/Y/Z around the group center or editor origin.
+-- All newly spawned presets align to the default 5-unit positional grid.
+-- Direct drawhud rendering and V1.4 group tools are unchanged.
+-- V1.4: Duplicate an editable group with independent vertices; merge a chosen
+-- source group into the selected target (one convex hull after merging).
+-- Rotate selected groups about their centroid or the editor origin on X/Y/Z,
+-- with a separate configurable ANGLE SNAP (click to type degrees).
+-- CAUTION: Merge takes the convex envelope of both groups; do not merge
+-- pieces intended to remain separate or hollow.
+-- V1.3: Client mesh lighting compatibility fix. UnlitGeneric by default
+-- avoids VertexLitGeneric black shading on some clients' custom meshes.
+-- All V1.2 editing and importing features are preserved.
+-- V1.2: Click-to-import existing Starfall custom prop collision hulls.
+-- Server reads PhysObj:getMeshConvexes(), which returns triangulated convex
+-- surfaces, deduplicates triangle vertices, and reconstructs editable groups.
+-- Source prop remains untouched. Supports AdvDupe2-pasted starfall_prop shapes.
+-- Each source convex becomes its own editable group, preserving hollow shells.
+-- Import coordinates are converted to this editor's spawn-origin reference,
+-- so moved/rotated source props import where they actually are in the world.
+-- An existing group is NOT automatically replaced: imported groups are added.
+-- V1.1: Whole-group drag/nudge and H key to hide/reopen the in-game editor.
+-- Activate HUD on this chip to open editor. Press H to HIDE the editor,
+-- release the cursor and camera, and use normal GMod tools/AdvDupe2.
+-- Press H again to return. The original Starfall HUD toggle also works.
+-- F = switch between FREE FLY (mouse look, WASD/Space/Ctrl) and EDIT (mouse cursor).
+-- In EDIT: left click a point to select it; drag to move on X/Y/Z work plane.
+-- GROUP DRAG moves EVERY point in the selected group by the same amount.
+-- GROUP X/Y/Z buttons translate the entire selected group by snap increments.
+-- Left click an empty area to ADD POINT only when 'PLACE POINT' mode is on.
+-- X/Y/Z fields: click, type a number, Enter. +/- buttons nudge by grid size.
+-- Presets: 8-vertex Box, 6-vertex Wedge, 5-hull Hollow Box, Free points.
+-- Mirror Y: reflect a GROUP across the central Y=0 plane on assembly.
+-- Every authored group represents ONE CONVEX collision volume.
+-- Different groups may be disconnected and can share one custom prop.
+-- Server max from user's screenshot: 10 convexes/prop, 300 vertices/convex,
+-- 2048 hull size, 14400 total vertices, 0.2 minimum vertex separation.
+-- Up to 4 props (40 convexes) per Assemble. Different props not welded.
+-- V1 does NOT provide arbitrary concave polygon cutting/boolean subtraction.
+-- ADV2: resulting physical entities are normal starfall custom props;
+-- client mesh is attached by this shared chip, so verify visual duplication.
+-- Only the owner uses the editor HUD; mesh attachments broadcast to all players.
+
+-- VISUAL MESH SHADER (clientside only).
+-- false (default): consistent vertex colors for all clients; no world shading.
+-- true: original VertexLitGeneric appearance, which can render black on
+--       some clients for custom meshes. Does not affect physical collision.
+local USE_MESH_WORLD_LIGHTING = false
+
+local LIMIT_CONVEXES = 10
+local LIMIT_VERTICES = 300
+local LIMIT_TOTAL = 14400
+local LIMIT_SIZE = 2048
+local LIMIT_MIN_GAP = 0.201
+local MAX_PARTS = 4
+local MAX_GROUPS = LIMIT_CONVEXES * MAX_PARTS
+local MAX_EDITOR_TRANSFER_VERTICES = 600 -- Safe V1 net.writeTable payload limit
+local SPAWN_RAISE = 160
+local MSG_BUILD = "tfe_vertex_forge_v11_build"
+local MSG_RESULT = "tfe_vertex_forge_v11_result"
+local MSG_MESH = "tfe_vertex_forge_v11_mesh"
+local MSG_IMPORT_REQUEST = "tfe_vertex_forge_v12_import_request"
+local MSG_IMPORT_REPLY = "tfe_vertex_forge_v12_import_reply"
+local VF_LIBRARY_DIR = "VertexForgeGroups"
+local VF_LIBRARY_MAGIC = "TFE_VERTEX_GROUPS_V1"
+local VF_LIBRARY_MAX_BYTES = 90000
+
+local function vecPoint(x,y,z) return {x,y,z} end
+local function copyPoint(p) return {p[1],p[2],p[3]} end
+local function roundTo(x,grid)
+    if grid <= 0 then return x end
+    return math.floor(x / grid + 0.5) * grid
+end
+local function packGroup(name,pts,mir,visible)
+    return {name=name,points=pts,mirror=mir or false,visible=visible~=false}
+end
+local function boxPoints(x0,x1,y0,y1,z0,z1)
+    return {
+        vecPoint(x0,y0,z0),vecPoint(x1,y0,z0),
+        vecPoint(x1,y1,z0),vecPoint(x0,y1,z0),
+        vecPoint(x0,y0,z1),vecPoint(x1,y0,z1),
+        vecPoint(x1,y1,z1),vecPoint(x0,y1,z1)
+    }
+end
+local function wedgePoints(x0,x1,y0,y1,z0,z1)
+    return {
+        vecPoint(x0,y0,z0),vecPoint(x0,y1,z0),
+        vecPoint(x1,y0,z0),vecPoint(x1,y1,z0),
+        vecPoint(x1,y0,z1),vecPoint(x1,y1,z1)
+    }
+end
+
+local function alreadyMirrorSymmetric(pts)
+    for i=1,#pts do
+        local p=pts[i]
+        local matching=false
+        for j=1,#pts do
+            local q=pts[j]
+            if math.abs(p[1]-q[1])<0.001 and math.abs(p[2]+q[2])<0.001
+               and math.abs(p[3]-q[3])<0.001 then matching=true;break end
+        end
+        if not matching then return false end
+    end
+    return true
+end
+-- Passing false skips hidden groups for assembly, without changing any
+-- authored vertices. Omitted argument includes all groups for compatibility.
+local function serializeConvex(groups,includeHidden)
+    local built={}
+    for i=1,#groups do
+        local g=groups[i]
+        if (includeHidden~=false or g.visible~=false) and #g.points>=4 then
+            built[#built+1]={name=g.name,points=g.points}
+            if g.mirror and not alreadyMirrorSymmetric(g.points) then
+                local copy={}
+                for j=1,#g.points do
+                    local p=g.points[j]
+                    copy[j]={p[1],-p[2],p[3]}
+                end
+                built[#built+1]={name=g.name.." mirrored",points=copy}
+            end
+        end
+    end
+    return built
+end
+local function checkAssembly(groups)
+    local total=0
+    if #groups<1 then return false,"No valid convex groups (need >=4 points)." end
+    if #groups>MAX_GROUPS then return false,"More than 40 convexes, or 4 props." end
+    for gi=1,#groups do
+        local pts=groups[gi].points
+        if #pts<4 or #pts>LIMIT_VERTICES then
+            return false,"Group "..gi.." must have 4 to 300 points."
+        end
+        total=total+#pts
+        local mn={1e20,1e20,1e20}
+        local mx={-1e20,-1e20,-1e20}
+        for i=1,#pts do
+            local p=pts[i]
+            if type(p)~="table" or #p~=3 then return false,"Bad point data in group "..gi end
+            for k=1,3 do
+                if type(p[k])~="number" or p[k]~=p[k] or math.abs(p[k])>8192 then
+                    return false,"Invalid coordinate in group "..gi
+                end
+                mn[k]=math.min(mn[k],p[k]);mx[k]=math.max(mx[k],p[k])
+            end
+            for j=i+1,#pts do
+                local q=pts[j]
+                local dx,dy,dz=p[1]-q[1],p[2]-q[2],p[3]-q[3]
+                if dx*dx+dy*dy+dz*dz<LIMIT_MIN_GAP*LIMIT_MIN_GAP then
+                    return false,"Group "..gi..": points "..i.." and "..j.." too close."
+                end
+            end
+        end
+        for k=1,3 do
+            if mx[k]-mn[k]>LIMIT_SIZE then
+                return false,"Group "..gi.." exceeds 2048-unit hull size."
+            end
+        end
+        -- Source needs a 3D convex volume. O(N) non-planarity check.
+        -- This avoids an O(N^3) loop when someone enters 300 planar points.
+        local a,b=pts[1],pts[2]
+        local ux,uy,uz=b[1]-a[1],b[2]-a[2],b[3]-a[3]
+        local nx,ny,nz=0,0,0
+        for j=3,#pts do
+            local c=pts[j]
+            local vx,vy,vz=c[1]-a[1],c[2]-a[2],c[3]-a[3]
+            local cx,cy,cz=uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx
+            if cx*cx+cy*cy+cz*cz>0.0001 then
+                nx,ny,nz=cx,cy,cz;break
+            end
+        end
+        local nonplanar=false
+        for j=3,#pts do
+            local d=pts[j]
+            local wx,wy,wz=d[1]-a[1],d[2]-a[2],d[3]-a[3]
+            if math.abs(nx*wx+ny*wy+nz*wz)>1 then
+                nonplanar=true;break
+            end
+        end
+        if not nonplanar then return false,"Group "..gi.." is flat or degenerate." end
+    end
+    if total>LIMIT_TOTAL then return false,"Total vertices exceed 14400." end
+    if total>MAX_EDITOR_TRANSFER_VERTICES then
+        return false,"Editor V1 transfer limit is 600 vertices (network safety)."
+    end
+    return true, "Valid: "..#groups.." hulls, "..total.." points, "..math.ceil(#groups/10).." props"
+end
+
+if SERVER then
+    -- Read the ACTUAL physics convexes rather than the optional clientside
+    -- visual mesh. This works after AdvDupe2, which retains collision data.
+    -- PhysObj:getMeshConvexes() is a table of triangulated MeshVertex lists;
+    -- repeated triangle corners must be deduplicated to recover source points.
+    local function sendImportReply(receiver, ok, message, data)
+        net.start(MSG_IMPORT_REPLY)
+        net.writeBool(ok)
+        net.writeString(message)
+        if ok then net.writeTable(data) end
+        net.send(receiver)
+    end
+
+    local function importPhysicsConvexes(ent)
+        if not ent or not ent:isValid() or ent:getClass() ~= "starfall_prop" then
+            return nil,"Click a Starfall CUSTOM PROP (starfall_prop), not a regular prop."
+        end
+        local phys=ent:getPhysicsObject()
+        if not phys or not phys:isValid() then
+            return nil,"Selected custom prop has no valid physics object."
+        end
+        local triangles=phys:getMeshConvexes()
+        if type(triangles)~="table" or #triangles==0 then
+            return nil,"Physics object did not return any convex mesh data."
+        end
+        if #triangles>LIMIT_CONVEXES then
+            return nil,"Source prop has more than 10 convexes."
+        end
+        local anchor=chip():getPos()+Vector(0,0,SPAWN_RAISE)
+        local result={}
+        local total=0
+        for ci=1,#triangles do
+            local faces=triangles[ci]
+            if type(faces)~="table" then return nil,"Malformed convex "..ci end
+            local unique,points={},{}
+            for vi=1,#faces do
+                local item=faces[vi]
+                local v=item and item.pos
+                if v then
+                    local x,y,z=v.x,v.y,v.z
+                    if type(x)=="number" and type(y)=="number" and type(z)=="number" then
+                        -- Physics mesh triangle corners share coordinates. A
+                        -- 0.01-unit quantization collapses repeated corners,
+                        -- but keeps distinct >=0.2-unit custom vertices.
+                        local key=string.format("%.2f:%.2f:%.2f",x,y,z)
+                        if not unique[key] then
+                            unique[key]=true
+                            local world=ent:localToWorld(v)
+                            local relative=world-anchor
+                            -- Source validation is done again on assembly.
+                            -- Preserve real-world placement, including rotation.
+                            points[#points+1]={relative.x,relative.y,relative.z}
+                            total=total+1
+                            if #points>LIMIT_VERTICES then
+                                return nil,"Source convex "..ci.." exceeds 300 unique points."
+                            end
+                            if total>MAX_EDITOR_TRANSFER_VERTICES then
+                                return nil,"Import exceeds 600 unique points (V1.2 transfer limit)."
+                            end
+                        end
+                    end
+                end
+            end
+            if #points<4 then return nil,"Source convex "..ci.." has fewer than four unique vertices." end
+            result[#result+1]=packGroup("Imported convex "..ci,points,false)
+        end
+        local valid,reason=checkAssembly(result)
+        if not valid then return nil,"Imported shape exceeds editor limits: "..reason end
+        return result,"Recovered "..#result.." convex group(s), "..total.." unique points."
+    end
+
+    net.receive(MSG_IMPORT_REQUEST,function(_,sender)
+        if sender~=owner() then return end
+        local ent=net.readEntity()
+        local ok,groupsOrErr,description=pcall(importPhysicsConvexes,ent)
+        if not ok then
+            sendImportReply(sender,false,"Import failed: "..tostring(groupsOrErr))
+        elseif not groupsOrErr then
+            sendImportReply(sender,false,description)
+        else
+            sendImportReply(sender,true,description,groupsOrErr)
+        end
+    end)
+
+    local assembled={}
+    local function sendOne(receiver,entry)
+        if not entry.ent or not entry.ent:isValid() then return end
+        net.start(MSG_MESH)
+        net.writeTable(entry.data)
+        net.writeEntity(entry.ent)
+        net.send(receiver)
+    end
+    hook.add("ClientInitialized","VertexForgeV11_Join",function(ply)
+        for i=1,#assembled do sendOne(ply,assembled[i]) end
+    end)
+    net.receive(MSG_BUILD,function(_,sender)
+        if sender~=owner() then return end
+        local requested=net.readTable()
+        if type(requested)~="table" then return end
+        local ok,reason=checkAssembly(requested)
+        if not ok then
+            net.start(MSG_RESULT);net.writeString(reason);net.send(sender)
+            return
+        end
+        local parts=math.ceil(#requested/LIMIT_CONVEXES)
+        -- All pieces share the same location and orientation. Not welded if >1.
+        local spawnPos=chip():getPos()+Vector(0,0,SPAWN_RAISE)
+        local created=0
+        for pi=1,parts do
+            local convexes,visual={},{}
+            for gi=(pi-1)*LIMIT_CONVEXES+1,math.min(pi*LIMIT_CONVEXES,#requested) do
+                local g=requested[gi]
+                local verts={}
+                for j=1,#g.points do
+                    local p=g.points[j]
+                    verts[#verts+1]=Vector(p[1],p[2],p[3])
+                end
+                convexes[#convexes+1]=verts
+                visual[#visual+1]=g
+            end
+            local spawned,ent=pcall(function()
+                return prop.createCustom(spawnPos,Angle(),convexes,true)
+            end)
+            if spawned and ent and ent:isValid() then
+                local entry={ent=ent,data=visual}
+                assembled[#assembled+1]=entry
+                sendOne(nil,entry) -- all players receive final custom mesh
+                created=created+1
+            else
+                net.start(MSG_RESULT)
+                net.writeString("Part "..pi.." failed: "..tostring(ent))
+                net.send(sender)
+            end
+        end
+        net.start(MSG_RESULT)
+        net.writeString("Assembled "..created.."/"..parts.." custom props. Use AdvDupe2 to test saving.")
+        net.send(sender)
+    end)
+else
+    -- CLIENT EDITOR STATE ----------------------------------------------------
+    local groups={}
+    local selectedGroup=1
+    local selectedPoint=1
+    local snap=5                  -- positional grid step, in Source units
+    -- Common snap sizes are intentional, not repeated multiplication by 2.
+    -- This allows a return from 0.5 to 5 using the +/- controls.
+    local snapPresets={0.5,1,2,2.5,5,10,20,40,64}
+    local function stepSnap(direction)
+        if direction>0 then
+            for i=1,#snapPresets do
+                if snapPresets[i]>snap+0.000001 then snap=snapPresets[i];return end
+            end
+            snap=64
+        else
+            for i=#snapPresets,1,-1 do
+                if snapPresets[i]<snap-0.000001 then snap=snapPresets[i];return end
+            end
+            snap=0.5
+        end
+    end
+    local angleSnap=15            -- rotation step in degrees, independent of snap
+    local rotateAxis=3            -- 1=X, 2=Y, 3=Z
+    local rotationPivot="CENTER" -- CENTER = mean of vertices, ORIGIN = (0,0,0)
+    local flipPivot="CENTER"     -- CENTER = bounding-box center, ORIGIN = (0,0,0)
+    local mergeSource=1           -- second group used by merge, not the target
+    local rightPage=1             -- 1=Move / Import; 2=Group Ops / Rotate; 3=Mirror / Flip; 4=Library
+    local editPlane="Z"   -- drag along X/Y/Z work plane
+    local activeEditor=false
+    local flying=false
+    local editorVisible=true -- H hides the editor without disabling SF input permanently.
+    local groupDrag=false -- All points follow the selected vertex in this mode.
+    local assembleHidden=true    -- Keep hidden authored pieces in the final model by default.
+    local importMode=false -- Click a physical starfall_prop, server reads convexes.
+    local importPending=false
+    local dragAnchorWorld=nil
+    local dragStartCursor=nil
+    local dragGroupSnapshot=nil
+    local adding=false
+    local cursorEnabled=false
+    local cameraPos=nil
+    local cameraAng=nil
+    local lastThink=timer.curtime()
+    local status="Ready. F = fly/edit; H = hide editor for tools/AdvDupe2."
+    local inputField=nil
+    local typed=""
+    local libraryName=""          -- User's preferred save name (blank = current group name).
+    local libraryFiles={}
+    local librarySelected=1
+    local libraryOverwriteKey=nil -- Second click required before overwriting a file.
+    local dragging=false
+    local mouseWasDown=false
+    local previewDirty=true
+    local previewNext=0
+    local edges={}
+    local previewCounts={visible=0,allHulls=0,visibleHulls=0}
+    local hitButtons={}
+    local materialCache=nil
+    local attachedMeshes={}
+    local gc = {Color(65,205,255),Color(255,183,80),Color(150,235,150),
+                Color(232,134,235),Color(255,235,130),Color(135,180,255)}
+    local white=Color(240,244,252)
+    local dim=Color(150,170,196)
+    local cyan=Color(50,215,255)
+    local yellow=Color(255,223,90)
+    local titleFont=render.createFont("Lucida Console",21)
+    local font=render.createFont("Lucida Console",15)
+    local smallFont=render.createFont("Lucida Console",13)
+
+    local function current()
+        return groups[selectedGroup]
+    end
+    local function dirty()
+        previewDirty=true
+    end
+    local function addGroup(name,points,mirror)
+        groups[#groups+1]=packGroup(name,points,mirror)
+        selectedGroup=#groups;selectedPoint=1;dirty()
+    end
+    local function addEmpty()
+        addGroup("Free "..(#groups+1),{})
+        adding=true
+        status="Free group started. Click in viewport to place points on work plane."
+    end
+    local function addBox()
+        local offset=(#groups%4)*55-80
+        addGroup("Box "..(#groups+1),boxPoints(-35+offset,35+offset,-30,30,-20,30))
+    end
+    local function addWedge()
+        local offset=(#groups%4)*55-80
+        addGroup("Wedge "..(#groups+1),wedgePoints(-45+offset,40+offset,-25,25,-20,35))
+    end
+    local function addHollow()
+        -- Remove the untouched starter solid before building a hollow shell.
+        -- Otherwise it would occupy the cavity and prevent interior physics.
+        if #groups==1 and groups[1].name=="Starter Box" then
+            groups={};selectedGroup=1;selectedPoint=1
+        end
+        -- Five independent convex groups, with a real empty cavity.
+        -- 140 x 100 x 75 external; thickness 10; roof open.
+        -- All preset vertex coordinates align to the default 5-unit grid.
+        if #groups+5>MAX_GROUPS then status="Too many groups for hollow preset.";return end
+        local x0,x1=-70,70
+        local y0,y1=-50,50
+        local z0,z1=-25,50
+        local t=10
+        addGroup("Floor",boxPoints(x0,x1,y0,y1,z0,z0+t))
+        addGroup("Wall north",boxPoints(x0,x1,y1-t,y1,z0+t,z1))
+        addGroup("Wall south",boxPoints(x0,x1,y0,y0+t,z0+t,z1))
+        addGroup("Wall east",boxPoints(x1-t,x1,y0+t,y1-t,z0+t,z1))
+        addGroup("Wall west",boxPoints(x0,x0+t,y0+t,y1-t,z0+t,z1))
+        status="Hollow shell: five separate convexes; open top."
+    end
+    addGroup("Starter Box",boxPoints(-40,40,-30,30,-25,25))
+    selectedGroup=1
+
+    local function expand(includeHidden)
+        local list=serializeConvex(groups,includeHidden)
+        if #list>MAX_GROUPS then return nil,"More than 40 hulls." end
+        return list
+    end
+    local function setCursor(enabled)
+        if cursorEnabled==enabled then return end
+        input.enableCursor(enabled)
+        cursorEnabled=enabled
+    end
+    local function ensureCamera()
+        if cameraPos then return end
+        local target=chip():getPos()+Vector(0,0,SPAWN_RAISE+8)
+        cameraPos=target+Vector(-230,-290,140)
+        cameraAng=(target-cameraPos):getAngle()
+    end
+    local function isActive()
+        return editorVisible and render.isHUDActive()
+    end
+
+    -- The HUDShouldDraw hook does not affect the editor's own drawhud hook.
+    -- Intentionally never hide CHudGMod: that can suppress Lua HUDPaint and
+    -- interfere with Starfall or other addons. CHudWeaponSelection also
+    -- prevents scroll-wheel weapon switching while the editor is visible.
+    local gameHUDToHide = {
+        CHudHealth=true, CHudBattery=true, CHudSuitPower=true,
+        CHudAmmo=true, CHudSecondaryAmmo=true,
+        CHudWeaponSelection=true, CHudCrosshair=true,
+    }
+    hook.add("HUDShouldDraw","VertexForgeV143_HideGModHUD",function(element)
+        if isActive() and gameHUDToHide[element] then return false end
+    end)
+
+    -- Sandbox toolgun help (upper-left tool information) is not a CHud*
+    -- element; it is controlled by the built-in gmod_drawhelp client cvar.
+    -- Never call concmd every frame: only when editor visibility changes.
+    -- Restore the game default (1) on hide; original nondefault 0 is unknown
+    -- because Starfall does not expose a guaranteed client cvar read API.
+    local toolgunHelpSuppressed=false
+    local function setToolgunHelpHidden(hidden)
+        if toolgunHelpSuppressed==hidden then return end
+        if player()~=owner() then return end
+        local ok=pcall(function()
+            concmd(hidden and "gmod_drawhelp 0" or "gmod_drawhelp 1")
+        end)
+        -- Retry on a later visibility transition if commands were blocked.
+        if ok then toolgunHelpSuppressed=hidden end
+    end
+    local function toggleEditor()
+        editorVisible=not editorVisible
+        -- HIDE must stop taking input immediately; the next think tick
+        -- restores edit mode/cursor when the editor is shown again.
+        dragging=false
+        dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+        mouseWasDown=false
+        if not editorVisible then
+            setToolgunHelpHidden(false)
+            setCursor(false)
+            flying=false
+            importMode=false
+            importPending=false
+            inputField=nil
+            status="Editor hidden. Use GMod tools/AdvDupe2; press H to reopen."
+        end
+    end
+    local function setMode(fly)
+        flying=fly;dragging=false;adding=false
+        if fly then importMode=false end
+        dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+        setCursor(not fly)
+        status=fly and "FLY: mouse look, WASD, Space/Ctrl, Shift fast. F = edit"
+                         or "EDIT: drag point/group, X/Y/Z nudge. F fly; H hide"
+    end
+
+    -- Selectable work plane. Ray hits plane through the selected point.
+    -- Other axes can then be adjusted in numeric fields.
+    local function worldPointAt(mx,my,reference)
+        local ray=input.screenToVector(mx,my)
+        local planePos=reference or (chip():getPos()+Vector(0,0,SPAWN_RAISE))
+        local numerator,denominator
+        if editPlane=="X" then
+            numerator=planePos.x-cameraPos.x;denominator=ray.x
+        elseif editPlane=="Y" then
+            numerator=planePos.y-cameraPos.y;denominator=ray.y
+        else
+            numerator=planePos.z-cameraPos.z;denominator=ray.z
+        end
+        if math.abs(denominator)<0.02 then return nil end
+        local dist=numerator/denominator
+        if dist<1 or dist>3500 then return nil end
+        local world=cameraPos+ray*dist
+        local localPoint=world-(chip():getPos()+Vector(0,0,SPAWN_RAISE))
+        return {roundTo(localPoint.x,snap),roundTo(localPoint.y,snap),
+                roundTo(localPoint.z,snap)}
+    end
+    local function selectedWorld()
+        local g=current()
+        local p=g and g.points[selectedPoint]
+        if not p then return nil end
+        return chip():getPos()+Vector(0,0,SPAWN_RAISE)+Vector(p[1],p[2],p[3])
+    end
+    local function removeSelectedPoint()
+        local g=current()
+        if not g or not g.points[selectedPoint] then return end
+        table.remove(g.points,selectedPoint)
+        selectedPoint=math.min(selectedPoint,#g.points)
+        dirty()
+    end
+    local function deleteSelectedGroup()
+        if not current() then return end
+        local deletedIndex=selectedGroup
+        table.remove(groups,deletedIndex)
+        selectedGroup=math.max(1,math.min(deletedIndex,#groups))
+        -- Source is an index into the same array, so keep it synchronized
+        -- when a group before it is removed.
+        if mergeSource>deletedIndex then
+            mergeSource=mergeSource-1
+        elseif mergeSource==deletedIndex then
+            mergeSource=math.min(#groups,selectedGroup==1 and 2 or 1)
+        end
+        mergeSource=math.max(1,mergeSource)
+        selectedPoint=1;dirty()
+    end
+    local function changeAxis(axis,value,snapIt)
+        local g=current()
+        if not g or not g.points[selectedPoint] then return end
+        g.points[selectedPoint][axis]=snapIt and roundTo(value,snap) or value
+        dirty()
+    end
+    -- Translate a convex without changing its size, shape, or vertex ordering.
+    -- This works for disconnected groups because group positions are local
+    -- to the same custom prop origin.
+    local function translateGroup(axis,amount)
+        local g=current()
+        if not g or #g.points==0 then return end
+        for i=1,#g.points do
+            g.points[i][axis]=g.points[i][axis]+amount
+        end
+        dirty()
+        status="Moved group "..selectedGroup.." by "..amount.." on axis "..axis
+    end
+    -- GROUP TOOLS ----------------------------------------------------------
+    -- All copies are deep copies. Moving/editing a duplicated group NEVER
+    -- changes the original group, even when their points overlap initially.
+    local function duplicateSelectedGroup()
+        local source=current()
+        if not source then status="Select a group before duplicating.";return end
+        if #groups>=MAX_GROUPS then
+            status="Duplicate failed: limit is 40 editable convex groups.";return
+        end
+        local total=0
+        for i=1,#groups do total=total+#groups[i].points end
+        if total+#source.points>MAX_EDITOR_TRANSFER_VERTICES then
+            status="Duplicate failed: design would exceed 600 editable points.";return
+        end
+        local points={}
+        for i=1,#source.points do points[i]=copyPoint(source.points[i]) end
+        local oldIndex=selectedGroup
+        addGroup(source.name.." copy",points,source.mirror)
+        current().visible=source.visible~=false
+        mergeSource=oldIndex
+        dragging=false
+        dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+        status="Duplicated G"..oldIndex.." as G"..selectedGroup..". "..
+               "Copies overlap until nudged or rotated."
+    end
+
+    -- The automatic Mirror Y is a preview/assembly feature, NOT an editable
+    -- group. Materialize its opposite-side points into a regular group and
+    -- disable auto-mirroring on the source to prevent an extra duplicate.
+    -- Both groups remain individually editable, movable and rotatable.
+    local function detachMirroredGroup()
+        local source=current()
+        if not source or not source.mirror then
+            status="DETACH: enable MIRROR Y on the selected group first.";return
+        end
+        if #source.points<4 then
+            status="DETACH: source needs at least 4 points.";return
+        end
+        if alreadyMirrorSymmetric(source.points) then
+            status="DETACH: source is already Y-symmetric; no other half to detach.";return
+        end
+        if #groups>=MAX_GROUPS then
+            status="DETACH: limit of 40 editable convex groups reached.";return
+        end
+        local total=0
+        for i=1,#groups do total=total+#groups[i].points end
+        if total+#source.points>MAX_EDITOR_TRANSFER_VERTICES then
+            status="DETACH: would exceed 600 editable points.";return
+        end
+        local sourceIndex=selectedGroup
+        local points={}
+        for i=1,#source.points do
+            local p=source.points[i]
+            points[i]={p[1],-p[2],p[3]}
+        end
+        source.mirror=false
+        addGroup(source.name.." mirrored",points,false)
+        current().visible=source.visible~=false
+        mergeSource=sourceIndex
+        dragging=false
+        dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+        status="Detached mirror of G"..sourceIndex.." as editable G"..selectedGroup..
+               ". Source and mirror are now independent."
+    end
+
+    -- Flip is a geometric reflection, NOT a 180-degree rotation.
+    -- Use the bounding-box midpoint (rather than vertex-average centroid)
+    -- so flipping preset-grid vertices preserves exact 5-unit alignment.
+    -- Flip pivot is independent of V1.4's rotation pivot.
+    local function flipSelectedGroup(axis)
+        local g=current()
+        if not g or #g.points==0 then
+            status="FLIP: select a group with points first.";return
+        end
+        local pivot=0
+        if flipPivot=="CENTER" then
+            local minv,maxv=g.points[1][axis],g.points[1][axis]
+            for i=2,#g.points do
+                local v=g.points[i][axis]
+                minv=math.min(minv,v)
+                maxv=math.max(maxv,v)
+            end
+            pivot=(minv+maxv)*0.5
+        end
+        for i=1,#g.points do
+            local p=g.points[i]
+            p[axis]=2*pivot-p[axis]
+        end
+        dragging=false
+        dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+        dirty()
+        local name=axis==1 and "X" or (axis==2 and "Y" or "Z")
+        status="Flipped G"..selectedGroup.." across "..name.." at "..flipPivot..
+               (g.mirror and ". Mirror Y is still ON; detach to edit halves." or ".")
+    end
+
+    -- Two convex groups can be merged by pooling unique vertices. A single
+    -- convex collision hull is then generated by the existing build path.
+    -- This deliberately does NOT attempt boolean union of concave shapes.
+    local function mergeIntoSelectedGroup()
+        local target=current()
+        local source=groups[mergeSource]
+        if not target or not source or selectedGroup==mergeSource then
+            status="MERGE: choose a different source group first.";return
+        end
+        if target.mirror or source.mirror then
+            status="MERGE: turn Mirror Y OFF on both groups first.";return
+        end
+        if #target.points==0 or #source.points==0 then
+            status="MERGE: source and target both need points.";return
+        end
+        local pts={}
+        for i=1,#target.points do pts[#pts+1]=copyPoint(target.points[i]) end
+        local gap2=LIMIT_MIN_GAP*LIMIT_MIN_GAP
+        local skipped=0
+        for i=1,#source.points do
+            local p=source.points[i]
+            local exists=false
+            for j=1,#pts do
+                local q=pts[j]
+                local dx,dy,dz=p[1]-q[1],p[2]-q[2],p[3]-q[3]
+                if dx*dx+dy*dy+dz*dz < gap2 then exists=true;break end
+            end
+            if exists then
+                skipped=skipped+1
+            else
+                pts[#pts+1]=copyPoint(p)
+            end
+        end
+        if #pts>LIMIT_VERTICES then
+            status="MERGE: more than 300 unique points in one convex.";return
+        end
+        local valid,reason=checkAssembly({packGroup(target.name,pts,false)})
+        if not valid then status="MERGE rejected: "..reason;return end
+        local oldTarget=selectedGroup
+        local oldSource=mergeSource
+        target.points=pts
+        target.name=target.name.." + G"..oldSource
+        table.remove(groups,oldSource)
+        if oldSource<oldTarget then selectedGroup=oldTarget-1 end
+        selectedPoint=1
+        mergeSource=math.min(#groups,selectedGroup==1 and 2 or 1)
+        dragging=false
+        dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+        dirty()
+        status="Merged G"..oldSource.." into target; "..skipped.." near-duplicate"..
+               " vertices skipped. Result is ONE convex hull."
+    end
+
+    -- Rotate points in their actual floating-point positions. Rounding to
+    -- the positional grid here would distort circles, especially at 15 deg.
+    local function rotateSelectedGroup(degrees)
+        local g=current()
+        if not g or #g.points==0 then status="Select a group to rotate.";return end
+        local px,py,pz=0,0,0
+        if rotationPivot=="CENTER" then
+            for i=1,#g.points do
+                local p=g.points[i]
+                px=px+p[1];py=py+p[2];pz=pz+p[3]
+            end
+            px=px/#g.points;py=py/#g.points;pz=pz/#g.points
+        end
+        local rad=math.rad(degrees)
+        local co,si=math.cos(rad),math.sin(rad)
+        for i=1,#g.points do
+            local p=g.points[i]
+            local x,y,z=p[1]-px,p[2]-py,p[3]-pz
+            if rotateAxis==1 then
+                p[2]=py+y*co-z*si
+                p[3]=pz+y*si+z*co
+            elseif rotateAxis==2 then
+                p[1]=px+x*co+z*si
+                p[3]=pz-x*si+z*co
+            else
+                p[1]=px+x*co-y*si
+                p[2]=py+x*si+y*co
+            end
+        end
+        dirty()
+        local axis=rotateAxis==1 and "X" or (rotateAxis==2 and "Y" or "Z")
+        status="Rotated G"..selectedGroup.." "..degrees.." deg about "..axis..
+               ", pivot "..rotationPivot.."."
+    end
+    local function cycleMergeSource(step)
+        if #groups<1 then mergeSource=1;return end
+        mergeSource=(mergeSource-1+step)%#groups+1
+    end
+
+    -- CUSTOM GROUP LIBRARY --------------------------------------------------
+    -- File operations are CLIENT ONLY. They use Garry's Mod's local
+    -- garrysmod/data/sf_filedata/VertexForgeGroups folder, not server storage.
+    -- Plain-text saves avoid relying on a JSON module that may not be exposed
+    -- by a given StarfallEx version. All coordinates retain full precision.
+    local function safeLibraryFilename(name)
+        if type(name)~="string" then return nil end
+        local slug=string.lower(name)
+        slug=string.gsub(slug,"[^%w_%-]+","_")
+        slug=string.gsub(slug,"_+","_")
+        slug=string.gsub(slug,"^_+","")
+        slug=string.gsub(slug,"_+$","")
+        slug=string.sub(slug,1,48)
+        if slug=="" then return nil end
+        return "vf_"..slug..".txt"
+    end
+    local function libraryDisplayName(filename)
+        return string.sub(filename,4,-5)
+    end
+    local function refreshGroupLibrary(selectFile)
+        local keep=selectFile or libraryFiles[librarySelected]
+        local ok,found=pcall(function()
+            return file.find(VF_LIBRARY_DIR.."/*.txt","nameasc")
+        end)
+        if not ok then
+            status="LIBRARY: Cannot list files: "..tostring(found)
+            return
+        end
+        local list={}
+        if type(found)=="table" then
+            for i=1,#found do
+                local name=found[i]
+                -- Ignore unrelated files and disallow arbitrary path segments.
+                if type(name)=="string" and string.match(name,"^vf_[a-z0-9_%-]+%.txt$") then
+                    list[#list+1]=name
+                end
+            end
+        end
+        table.sort(list)
+        libraryFiles=list
+        librarySelected=1
+        if keep then
+            for i=1,#list do
+                if list[i]==keep then librarySelected=i;break end
+            end
+        end
+    end
+    local function libraryTotalEditablePoints(items)
+        local total=0
+        for i=1,#items do
+            local g=items[i]
+            if type(g)~="table" or type(g.points)~="table" or
+               #g.points<1 or #g.points>LIMIT_VERTICES then
+                return nil,"Each group needs 1 to 300 points."
+            end
+            total=total+#g.points
+            for j=1,#g.points do
+                local p=g.points[j]
+                if type(p)~="table" or #p~=3 then return nil,"Invalid point data." end
+                for k=1,3 do
+                    local n=p[k]
+                    if type(n)~="number" or n~=n or n==math.huge or
+                       n==-math.huge or math.abs(n)>8192 then
+                        return nil,"Invalid coordinate in group "..i.."."
+                    end
+                end
+            end
+        end
+        if total>MAX_EDITOR_TRANSFER_VERTICES then
+            return nil,"More than 600 editable points."
+        end
+        return total
+    end
+    local function encodeLibraryShape(items)
+        local total,err=libraryTotalEditablePoints(items)
+        if not total then return nil,err end
+        if #items>MAX_GROUPS then return nil,"More than 40 groups." end
+        local lines={VF_LIBRARY_MAGIC,tostring(#items)}
+        for i=1,#items do
+            local g=items[i]
+            local name=tostring(g.name or ("Group "..i))
+            name=string.gsub(name,"[\r\n\t]"," ")
+            name=string.sub(name,1,80)
+            -- New trailing flag is optional so V1.4.2/V1.4.3 files still load.
+            lines[#lines+1]="G\t"..name.."\t"..(g.mirror and "1" or "0").."\t"..
+                #g.points.."\t"..(g.visible==false and "0" or "1")
+            for j=1,#g.points do
+                local p=g.points[j]
+                lines[#lines+1]=string.format("P\t%.17g\t%.17g\t%.17g",p[1],p[2],p[3])
+            end
+        end
+        local content=table.concat(lines,"\n").."\n"
+        if #content>VF_LIBRARY_MAX_BYTES then return nil,"Shape file too large." end
+        return content,total
+    end
+    local function decodeLibraryShape(content)
+        if type(content)~="string" or #content>VF_LIBRARY_MAX_BYTES then
+            return nil,"Missing or oversized shape file."
+        end
+        local lines={}
+        for line in string.gmatch(content,"[^\r\n]+") do lines[#lines+1]=line end
+        if lines[1]~=VF_LIBRARY_MAGIC then return nil,"Unsupported group file format." end
+        local count=tonumber(lines[2])
+        if not count or count<1 or count>MAX_GROUPS or count%1~=0 then
+            return nil,"Invalid number of saved groups."
+        end
+        local index=3
+        local result={}
+        for gi=1,count do
+            local line=lines[index];index=index+1
+            if not line then return nil,"Truncated group header." end
+            local name,mirror,countStr,visible=string.match(
+                line,"^G\t([^\t]*)\t([01])\t(%d+)\t([01])$")
+            if not name then
+                name,mirror,countStr=string.match(line,"^G\t([^\t]*)\t([01])\t(%d+)$")
+                visible="1" -- Legacy shape files did not have visibility.
+            end
+            local n=tonumber(countStr)
+            if not name or not n or n<1 or n>LIMIT_VERTICES then
+                return nil,"Invalid group header "..gi.."."
+            end
+            local pts={}
+            for pi=1,n do
+                local pLine=lines[index];index=index+1
+                if not pLine then return nil,"Missing vertices in group "..gi.."." end
+                local a,b,c=string.match(pLine,"^P\t([^\t]+)\t([^\t]+)\t([^\t]+)$")
+                if not a then return nil,"Invalid vertex in group "..gi.."." end
+                local x,y,z=tonumber(a),tonumber(b),tonumber(c)
+                if not x or not y or not z then return nil,"Non-numeric vertex in group "..gi.."." end
+                pts[#pts+1]={x,y,z}
+            end
+            result[#result+1]=packGroup(name~="" and name or ("Saved group "..gi),pts,mirror=="1",visible~="0")
+        end
+        if index<=#lines then return nil,"Unexpected trailing save data." end
+        local total,err=libraryTotalEditablePoints(result)
+        if not total then return nil,err end
+        return result,total
+    end
+    local function selectedLibraryFilename()
+        return libraryFiles[librarySelected]
+    end
+    local function saveLibraryShape(allGroups)
+        if player()~=owner() then return end
+        local items={}
+        if allGroups then
+            for i=1,#groups do items[#items+1]=groups[i] end
+        else
+            if current() then items[1]=current() end
+        end
+        if #items==0 then status="LIBRARY: Nothing to save.";return end
+        local fallback=allGroups and "Assembly" or (current() and current().name or "Group")
+        local target=libraryName~="" and libraryName or fallback
+        local filename=safeLibraryFilename(target)
+        if not filename then status="LIBRARY: Enter a valid save name.";return end
+        local payload,info=encodeLibraryShape(items)
+        if not payload then status="SAVE: "..tostring(info);return end
+        local path=VF_LIBRARY_DIR.."/"..filename
+        local uniqueKey=filename..(allGroups and ":ALL" or ":GROUP")
+        local ok,exists=pcall(function()return file.exists(path) end)
+        if not ok then status="SAVE: File access failed: "..tostring(exists);return end
+        if exists and libraryOverwriteKey~=uniqueKey then
+            libraryOverwriteKey=uniqueKey
+            status="File exists. Click same SAVE button again to overwrite."
+            return
+        end
+        local written,err=pcall(function()
+            file.createDir(VF_LIBRARY_DIR)
+            file.write(path,payload)
+        end)
+        if not written then status="SAVE failed: "..tostring(err);return end
+        libraryOverwriteKey=nil
+        refreshGroupLibrary(filename)
+        status="Saved "..#items.." group(s), "..info.." points: "..filename
+    end
+    local function pristineStarterOnly()
+        if #groups~=1 or groups[1].name~="Starter Box" or groups[1].mirror or
+           #groups[1].points~=8 then return false end
+        local expected=boxPoints(-40,40,-30,30,-25,25)
+        for i=1,8 do
+            for a=1,3 do
+                if groups[1].points[i][a]~=expected[i][a] then return false end
+            end
+        end
+        return true
+    end
+    local function loadLibraryShape()
+        if player()~=owner() then return end
+        local filename=selectedLibraryFilename()
+        if not filename then status="LIBRARY: No saved shapes to load.";return end
+        local ok,content=pcall(function()
+            return file.read(VF_LIBRARY_DIR.."/"..filename)
+        end)
+        if not ok then status="LOAD: File access failed: "..tostring(content);return end
+        local imported,info=decodeLibraryShape(content)
+        if not imported then status="LOAD: "..tostring(info);return end
+        local removeStarter=pristineStarterOnly()
+        local candidate={}
+        if not removeStarter then
+            for i=1,#groups do candidate[#candidate+1]=groups[i] end
+        end
+        for i=1,#imported do candidate[#candidate+1]=imported[i] end
+        if #candidate>MAX_GROUPS then
+            status="LOAD: Exceeds 40 editable groups.";return
+        end
+        local total,err=libraryTotalEditablePoints(candidate)
+        if not total then status="LOAD: "..err;return end
+        local expanded=serializeConvex(candidate)
+        if #expanded>MAX_GROUPS then
+            status="LOAD: Mirrored shapes exceed 40 assembly hulls.";return
+        end
+        local expandedTotal=0
+        for i=1,#expanded do expandedTotal=expandedTotal+#expanded[i].points end
+        if expandedTotal>MAX_EDITOR_TRANSFER_VERTICES then
+            status="LOAD: Mirrored shapes exceed 600 assembly points.";return
+        end
+        -- Only commit after the entire file and resulting design validate.
+        if removeStarter then groups={} end
+        local first=#groups+1
+        for i=1,#imported do
+            local source=imported[i]
+            local pts={}
+            for j=1,#source.points do pts[j]=copyPoint(source.points[j]) end
+            groups[#groups+1]=packGroup(source.name,pts,source.mirror,source.visible)
+        end
+        selectedGroup=first
+        selectedPoint=1
+        adding=false
+        dragging=false
+        dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+        dirty()
+        status="Loaded "..#imported.." group(s), "..info.." points; independent copies."
+    end
+    local function cycleLibraryFile(step)
+        if #libraryFiles==0 then return end
+        librarySelected=(librarySelected-1+step)%#libraryFiles+1
+        libraryOverwriteKey=nil
+    end
+
+    local function assemble()
+        for i=1,#groups do
+            if (assembleHidden or groups[i].visible~=false) and #groups[i].points<4 then
+                status="Group "..i.." incomplete: at least 4 points required."
+                return
+            end
+        end
+        local all,reason=expand(assembleHidden)
+        if not all then status=reason;return end
+        if #all==0 then
+            status="No eligible convex groups. Enable hidden assembly or show a group."
+            return
+        end
+        local ok,msg=checkAssembly(all)
+        status=msg
+        if not ok then return end
+        net.start(MSG_BUILD)
+        net.writeTable(all)
+        net.send()
+        status="Sending "..#all.." hulls (hidden: "..
+               (assembleHidden and "INCLUDED" or "EXCLUDED")..") for assembly..."
+    end
+    net.receive(MSG_RESULT,function() status=net.readString() end)
+    net.receive(MSG_IMPORT_REPLY,function()
+        local ok=net.readBool()
+        local message=net.readString()
+        importPending=false
+        if not ok then status=message;return end
+        local imported=net.readTable()
+        if type(imported)~="table" or #imported==0 then
+            status="Import returned no usable convexes.";return
+        end
+        -- A newly loaded chip contains a starter box. Remove that default
+        -- box only if it is still completely untouched; otherwise preserve
+        -- the user's existing model and append imported pieces.
+        local removeStarter=false
+        if #groups==1 and groups[1].name=="Starter Box"
+           and not groups[1].mirror and #groups[1].points==8 then
+            local expected=boxPoints(-40,40,-30,30,-25,25)
+            removeStarter=true
+            for i=1,8 do
+                local p,q=groups[1].points[i],expected[i]
+                if p[1]~=q[1] or p[2]~=q[2] or p[3]~=q[3] then
+                    removeStarter=false;break
+                end
+            end
+        end
+        local currentCount=0
+        if not removeStarter then
+            for i=1,#groups do currentCount=currentCount+#groups[i].points end
+        end
+        local addedCount=0
+        for i=1,#imported do
+            if type(imported[i])~="table" or type(imported[i].points)~="table" then
+                status="Import rejected: invalid group data.";return
+            end
+            addedCount=addedCount+#imported[i].points
+        end
+        local existingGroups=removeStarter and 0 or #groups
+        if existingGroups+#imported>MAX_GROUPS then
+            status="Import rejected: resulting design exceeds 40 convex groups.";return
+        end
+        if currentCount+addedCount>MAX_EDITOR_TRANSFER_VERTICES then
+            status="Import rejected: design would exceed 600 editable points.";return
+        end
+        if removeStarter then groups={} end
+        for i=1,#imported do
+            local src=imported[i]
+            local newPoints={}
+            for j=1,#src.points do
+                newPoints[j]=copyPoint(src.points[j])
+            end
+            groups[#groups+1]=packGroup(src.name or ("Imported convex "..i),newPoints,false)
+        end
+        selectedGroup=#groups-#imported+1
+        selectedPoint=1
+        adding=false
+        importMode=false
+        dirty()
+        status=message.." Added to editor; source prop is unchanged."
+    end)
+
+    -- Client meshes for finalized physics props; one mesh per assembled part.
+    -- Convex hulls supply faces automatically. We use the known-good Source
+    -- A,C,B triangle winding from the sloped cube V2/V3 tests.
+    local function applyMesh(ent,gs)
+        if not ent or not ent:isValid() then return end
+        local tris={}
+        for gi=1,#gs do
+            local p=gs[gi].points
+            local vectors={}
+            local mid=Vector(0,0,0)
+            for j=1,#p do
+                local v=Vector(p[j][1],p[j][2],p[j][3])
+                vectors[j]=v;mid=mid+v
+            end
+            mid=mid/#p
+            local ok,hull=pcall(function()
+                return mesh.findConvexHull(vectors,false)
+            end)
+            if ok and type(hull)=="table" then
+                local col=gc[(gi-1)%#gc+1]
+                for j=1,#hull-2,3 do
+                    local a,b,c=hull[j].pos,hull[j+1].pos,hull[j+2].pos
+                    if a and b and c then
+                        local n=(b-a):cross(c-a)
+                        if n:getLength()>0.0001 then
+                            if n:dot((a+b+c)/3-mid)<0 then b,c=c,b;n=-n end
+                            n=n:getNormalized()
+                            local function push(v,u,vt)
+                                tris[#tris+1]={pos=v,normal=n,u=u,v=vt,color=col}
+                            end
+                            push(a,0,0);push(c,1,1);push(b,1,0)
+                        end
+                    end
+                end
+            end
+        end
+        if #tris<3 then status="Visual mesh failed: no triangles.";return end
+        local created=mesh.createFromTable(tris)
+        if not materialCache then
+            -- GMod's custom mesh path can shade VertexLitGeneric meshes black
+            -- on some clients. UnlitGeneric keeps per-vertex colors stable.
+            materialCache=material.create(
+                USE_MESH_WORLD_LIGHTING and "VertexLitGeneric" or "UnlitGeneric")
+            materialCache:setInt("$model",1)
+            materialCache:setTexture("$basetexture","models/debug/debugwhite")
+            materialCache:setInt("$vertexcolor",1)
+            materialCache:setInt("$vertexalpha",1)
+        end
+        ent:setMesh(created)
+        ent:setMeshMaterial(materialCache)
+        attachedMeshes[#attachedMeshes+1]=created
+    end
+    net.receive(MSG_MESH,function()
+        local gs=net.readTable()
+        net.readEntity(function(ent)
+            if ent and ent:isValid() then
+                local ok,err=pcall(applyMesh,ent,gs)
+                if not ok then status="Mesh error: "..tostring(err) end
+            end
+        end)
+    end)
+
+    local function previewBuild()
+        edges={}
+        local counts={visible=0,allHulls=0,visibleHulls=0}
+        for gi=1,#groups do
+            local g=groups[gi]
+            local shown=g.visible~=false
+            if shown then counts.visible=counts.visible+1 end
+            if #g.points>=4 then
+                local n=g.mirror and not alreadyMirrorSymmetric(g.points) and 2 or 1
+                counts.allHulls=counts.allHulls+n
+                if shown then counts.visibleHulls=counts.visibleHulls+n end
+            end
+            -- Hidden groups do not run convex-hull processing at all.
+            if shown then
+                local pts={}
+                for j=1,#g.points do
+                    local p=g.points[j]
+                    pts[j]=Vector(p[1],p[2],p[3])
+                end
+                if #pts>=4 then
+                local ok,face=pcall(function()return mesh.findConvexHull(pts,false)end)
+                if ok and type(face)=="table" then
+                    local seen={}
+                    for j=1,#face-2,3 do
+                        local a,b,c=face[j].pos,face[j+1].pos,face[j+2].pos
+                        if a and b and c then
+                            local pairsOfPoints={{a,b},{b,c},{c,a}}
+                            for k=1,3 do
+                                local pa,pb=pairsOfPoints[k][1],pairsOfPoints[k][2]
+                                local ka=string.format("%.3f,%.3f,%.3f",pa.x,pa.y,pa.z)
+                                local kb=string.format("%.3f,%.3f,%.3f",pb.x,pb.y,pb.z)
+                                local key=ka<kb and (ka.."/"..kb) or (kb.."/"..ka)
+                                if not seen[key] then
+                                    seen[key]=true
+                                    edges[#edges+1]={gi,pa,pb,false}
+                                    if g.mirror then
+                                        edges[#edges+1]={gi,Vector(pa.x,-pa.y,pa.z),
+                                                          Vector(pb.x,-pb.y,pb.z),true}
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end -- valid preview hull
+            end -- shown
+        end
+        previewCounts=counts
+        previewDirty=false
+    end
+
+    -- UI PAINT --------------------------------------------------------------
+    local function txt(x,y,s,col,small)
+        render.setColor(col or white)
+        render.setFont(small and smallFont or font)
+        render.drawText(x,y,tostring(s))
+    end
+    local function panel(x,y,w,h)
+        render.setColor(Color(12,19,34,229));render.drawRect(x,y,w,h)
+        render.setColor(Color(54,116,145,255));render.drawRectOutline(x,y,w,h,1)
+    end
+    local function btn(x,y,w,h,text,callback,active)
+        hitButtons[#hitButtons+1]={x=x,y=y,w=w,h=h,fn=callback}
+        render.setColor(active and Color(33,110,131,247) or Color(27,46,71,241))
+        render.drawRect(x,y,w,h)
+        render.setColor(Color(76,115,147))
+        render.drawRectOutline(x,y,w,h,1)
+        txt(x+6,y+4,text,white,true)
+    end
+    local function pointLabel(axis,axisIndex,x,y)
+        local p=current() and current().points[selectedPoint]
+        local val=p and string.format("%.1f",p[axisIndex]) or "---"
+        local label=axis..": "..(inputField==axis and (typed.."_") or val)
+        btn(x,y,128,25,label,function()
+            if p then
+                inputField=axis;typed=tostring(p[axisIndex]);status="Type "..axis.." coordinate then ENTER"
+            end
+        end,inputField==axis)
+        btn(x+132,y,27,25,"-",function() if p then changeAxis(axisIndex,p[axisIndex]-snap) end end)
+        btn(x+161,y,27,25,"+",function() if p then changeAxis(axisIndex,p[axisIndex]+snap) end end)
+    end
+    local function cursorOverRect(mx,my,r)
+        return mx>=r.x and mx<=r.x+r.w and my>=r.y and my<=r.y+r.h
+    end
+    local function toggleImport()
+        importMode=not importMode
+        if importMode then
+            adding=false
+            dragging=false
+            groupDrag=false
+            importPending=false
+            status="IMPORT ON: click a physical Starfall prop to recover its convexes."
+        else
+            status="Import mode cancelled."
+        end
+    end
+    -- Library page in its own function: large inline drawUI captured 64
+    -- upvalues in V1.4.2; LuaJIT accepts no more than 60.
+    local function drawLibraryPage(rightX)
+    txt(rightX+12,322,"CUSTOM VERTEX GROUP LIBRARY",cyan)
+    txt(rightX+12,345,"data/sf_filedata/VertexForgeGroups",dim,true)
+    local autoName=current() and current().name or "Assembly"
+    local shown=(inputField=="LIBRARY_NAME") and (typed.."_") or
+                (libraryName~="" and libraryName or ("(auto) "..autoName))
+    if #shown>27 then shown=string.sub(shown,1,24).."..." end
+    btn(rightX+12,368,283,27,"NAME: "..shown,function()
+        inputField="LIBRARY_NAME"
+        typed=libraryName~="" and libraryName or autoName
+        status="Type shape name (letters/numbers/spaces), ENTER to set."
+    end,inputField=="LIBRARY_NAME")
+    btn(rightX+12,403,135,30,
+        libraryOverwriteKey and string.sub(libraryOverwriteKey,-6)==":GROUP" and
+        "CONFIRM REPLACE" or "SAVE GROUP",
+        function() saveLibraryShape(false) end)
+    btn(rightX+159,403,136,30,
+        libraryOverwriteKey and string.sub(libraryOverwriteKey,-4)==":ALL" and
+        "CONFIRM REPLACE" or "SAVE ALL",
+        function() saveLibraryShape(true) end)
+    txt(rightX+12,448,"Saved shapes: "..#libraryFiles,cyan)
+    btn(rightX+12,473,135,27,"< FILE",function() cycleLibraryFile(-1) end)
+    btn(rightX+159,473,136,27,"FILE >",function() cycleLibraryFile(1) end)
+    local saved=selectedLibraryFilename()
+    local selectedText=saved and libraryDisplayName(saved) or "(none yet)"
+    if #selectedText>24 then selectedText=string.sub(selectedText,1,21).."..." end
+    txt(rightX+12,512,"Selected: "..selectedText,white,true)
+    txt(rightX+12,533,"File "..librarySelected.." / "..#libraryFiles,dim,true)
+    btn(rightX+12,555,283,29,"LOAD SELECTED SHAPE",loadLibraryShape,true)
+    btn(rightX+12,592,283,27,"REFRESH SAVED SHAPES",function()
+        refreshGroupLibrary()
+        status="Library refreshed: "..#libraryFiles.." saved shapes."
+    end)
+    txt(rightX+12,623,"Load adds groups to your model.",dim,true)
+    txt(rightX+12,639,"Untouched starter is replaced.",dim,true)
+    end
+
+    local function drawUI(sw,sh)
+        hitButtons={}
+        panel(12,44,329,581)
+        render.setFont(titleFont)
+        render.setColor(cyan)
+        render.drawText(22,14,"TFE VERTEX FORGE  /  V1.4.6")
+        txt(23,54,"FREE CAMERA / CONVEX-GROUP EDITOR",dim,true)
+        btn(23,83,145,29,flying and "F: ENTER EDIT" or "F: FREE FLY",function()
+            setMode(not flying)
+        end,flying)
+        btn(176,83,150,29,"ASSEMBLE PROP",assemble,true)
+        btn(23,113,303,26,"ASSEMBLE HIDDEN: "..
+            (assembleHidden and "INCLUDE" or "EXCLUDE"),function()
+            assembleHidden=not assembleHidden
+            status=assembleHidden and "ASSEMBLE will include hidden groups." or
+                                      "ASSEMBLE will skip hidden groups."
+        end,assembleHidden)
+        btn(23,144,70,27,"+ BOX",addBox)
+        btn(99,144,72,27,"+ WEDGE",addWedge)
+        btn(177,144,72,27,"+ HOLLOW",addHollow)
+        btn(255,144,71,27,"+ FREE",addEmpty)
+        local g=current()
+        btn(23,180,73,27,"< GROUP",function()
+            if #groups>0 then selectedGroup=(selectedGroup-2)%#groups+1;selectedPoint=1 end
+        end)
+        btn(102,180,77,27,"GROUP >",function()
+            if #groups>0 then selectedGroup=selectedGroup%#groups+1;selectedPoint=1 end
+        end)
+        btn(185,180,141,27,"DELETE GROUP",deleteSelectedGroup)
+        local groupLabel=g and g.name or "NONE"
+        if #groupLabel>23 then groupLabel=string.sub(groupLabel,1,20).."..." end
+        txt(23,217,"Group "..selectedGroup.." / "..#groups..": "..groupLabel,white)
+        txt(23,238,"Points: "..(g and #g.points or 0),dim,true)
+        btn(166,232,160,25,"VISIBLE: "..
+            (g and (g.visible~=false and "ON" or "OFF") or "---"),function()
+            local cg=current()
+            if cg then
+                cg.visible=not (cg.visible~=false)
+                dirty()
+                status="Group "..selectedGroup..(cg.visible and " visible." or " hidden (still editable via GROUP buttons).")
+            end
+        end,g and g.visible~=false)
+        btn(23,262,145,27,"MIRROR Y: "..(g and (g.mirror and "ON" or "OFF") or "---"),function()
+            local cg=current();if cg then cg.mirror=not cg.mirror;dirty() end
+        end,g and g.mirror)
+        btn(176,262,150,27,"PLACE POINT: "..(adding and "ON" or "OFF"),function()
+            adding=not adding
+        end,adding)
+        btn(23,298,97,27,"< POINT",function()
+            if g and #g.points>0 then selectedPoint=(selectedPoint-2)%#g.points+1 end
+        end)
+        btn(126,298,96,27,"POINT >",function()
+            if g and #g.points>0 then selectedPoint=selectedPoint%#g.points+1 end
+        end)
+        btn(228,298,98,27,"DELETE PT",removeSelectedPoint)
+        txt(23,330,"Selected vertex "..selectedPoint.." / "..(g and #g.points or 0),dim)
+        pointLabel("X",1,23,356)
+        pointLabel("Y",2,23,386)
+        pointLabel("Z",3,23,416)
+        txt(23,455,"Drag plane: "..editPlane.."   Snap: "..snap,white)
+        btn(23,481,75,26,"PLANE X",function() editPlane="X" end,editPlane=="X")
+        btn(104,481,75,26,"PLANE Y",function() editPlane="Y" end,editPlane=="Y")
+        btn(185,481,75,26,"PLANE Z",function() editPlane="Z" end,editPlane=="Z")
+        btn(23,515,70,27,"SNAP -",function() stepSnap(-1) end)
+        btn(99,515,144,27,"SNAP: "..
+            (inputField=="SNAP" and typed.."_" or tostring(snap)).." TYPE",function()
+            inputField="SNAP"
+            typed=tostring(snap)
+            status="Type positional snap (0.5 to 64), then press ENTER."
+        end,inputField=="SNAP")
+        btn(249,515,77,27,"SNAP +",function() stepSnap(1) end)
+        txt(23,551,"Drag vertex (Group Drag on = all points).",dim,true)
+        txt(23,570,"For concave parts use MULTIPLE groups.",dim,true)
+        txt(23,592,"H: hide editor; import mode on right.",yellow,true)
+        local rightX=sw-320
+        panel(rightX,44,307,662)
+        txt(rightX+12,53,"MODEL OVERVIEW",cyan)
+        local buildCount=assembleHidden and previewCounts.allHulls or previewCounts.visibleHulls
+        txt(rightX+12,81,"Groups: "..#groups.."   Visible: "..previewCounts.visible,white)
+        txt(rightX+12,103,"Assembly hulls: "..buildCount.." / 40",white)
+        txt(rightX+12,125,"Est. physical props: "..math.ceil(buildCount/10),white)
+        txt(rightX+12,154,"CAMERA CONTROLS",cyan)
+        txt(rightX+12,179,"F: Fly / Edit    W A S D: Move",dim,true)
+        txt(rightX+12,199,"Space / Ctrl: Up / Down",dim,true)
+        txt(rightX+12,219,"Shift: Fast movement",dim,true)
+        txt(rightX+12,239,"Mouse: Look (FLY) / select (EDIT)",dim,true)
+        txt(rightX+12,259,"H: Hide editor for GMod tools",yellow,true)
+        -- Four pages retain V1.4's controls and use direct HUD rendering.
+        btn(rightX+12,282,65,29,"MOVE",function() rightPage=1 end,rightPage==1)
+        btn(rightX+84,282,65,29,"GROUP",function() rightPage=2 end,rightPage==2)
+        btn(rightX+156,282,65,29,"FLIP",function() rightPage=3 end,rightPage==3)
+        btn(rightX+228,282,67,29,"LIBRARY",function()
+            rightPage=4
+            local ok,err=pcall(function() file.createDir(VF_LIBRARY_DIR) end)
+            if not ok then
+                status="LIBRARY: Cannot create folder: "..tostring(err)
+            else
+                refreshGroupLibrary()
+            end
+        end,rightPage==4)
+        if rightPage==1 then
+            txt(rightX+12,324,"GROUP TRANSFORM",cyan)
+            btn(rightX+12,345,283,28,"GROUP DRAG: "..(groupDrag and "ON" or "OFF"),function()
+                groupDrag=not groupDrag
+                dragging=false
+                dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+                status=groupDrag and "Group Drag ON: drag a vertex to move its group."
+                                 or "Group Drag OFF: drag moves individual points."
+            end,groupDrag)
+            txt(rightX+12,381,"Nudge selected GROUP by snap ("..snap..")",dim,true)
+            local function axisNudge(axis,index,y)
+                txt(rightX+23,y+5,axis,white)
+                btn(rightX+56,y,102,27,"- "..snap,function() translateGroup(index,-snap) end)
+                btn(rightX+166,y,102,27,"+ "..snap,function() translateGroup(index,snap) end)
+            end
+            axisNudge("X",1,401)
+            axisNudge("Y",2,436)
+            axisNudge("Z",3,471)
+            btn(rightX+12,515,283,29,
+                "IMPORT STARFALL PROP: "..(importMode and "ON" or "OFF"),toggleImport,importMode)
+            txt(rightX+12,555,"EDIT: Click a Starfall prop.",dim,true)
+            txt(rightX+12,579,"Group moves keep vertex spacing.",dim,true)
+        elseif rightPage==2 then
+            txt(rightX+12,323,"GROUP DUPLICATE / MERGE",cyan)
+            btn(rightX+12,345,283,29,"DUPLICATE SELECTED GROUP",duplicateSelectedGroup,true)
+            txt(rightX+12,383,
+                "Merge G"..mergeSource.." into selected G"..selectedGroup,dim,true)
+            btn(rightX+12,403,135,27,"< SOURCE",function() cycleMergeSource(-1) end)
+            btn(rightX+159,403,136,27,"SOURCE >",function() cycleMergeSource(1) end)
+            btn(rightX+12,435,283,29,"MERGE SOURCE INTO SELECTED",mergeIntoSelectedGroup)
+            txt(rightX+12,472,"ROTATE SELECTED GROUP",cyan)
+            btn(rightX+12,491,283,26,"PIVOT: "..
+                (rotationPivot=="CENTER" and "GROUP CENTER" or "EDITOR ORIGIN"),
+                function() rotationPivot=rotationPivot=="CENTER" and "ORIGIN" or "CENTER" end)
+            btn(rightX+12,522,88,26,"AXIS X",function() rotateAxis=1 end,rotateAxis==1)
+            btn(rightX+109,522,88,26,"AXIS Y",function() rotateAxis=2 end,rotateAxis==2)
+            btn(rightX+206,522,89,26,"AXIS Z",function() rotateAxis=3 end,rotateAxis==3)
+            btn(rightX+12,555,135,28,"- "..angleSnap.." DEG",
+                function() rotateSelectedGroup(-angleSnap) end)
+            btn(rightX+159,555,136,28,"+ "..angleSnap.." DEG",
+                function() rotateSelectedGroup(angleSnap) end)
+            btn(rightX+12,592,283,28,
+                "ANGLE SNAP: "..(inputField=="ANGLE_SNAP" and typed.."_" or angleSnap)..
+                " DEG  (EDIT)",function()
+                    inputField="ANGLE_SNAP"
+                    typed=tostring(angleSnap)
+                    status="Enter rotation snap degrees, then press ENTER."
+                end,inputField=="ANGLE_SNAP")
+            txt(rightX+12,631,"Merge makes one solid convex hull.",yellow,true)
+        elseif rightPage==3 then
+            txt(rightX+12,323,"MIRROR TO EDITABLE GROUP",cyan)
+            txt(rightX+12,345,"Selected G"..selectedGroup..": MIRROR Y "..
+                (g and (g.mirror and "ON" or "OFF") or "---"),white,true)
+            btn(rightX+12,368,283,30,"DETACH MIRRORED COPY",detachMirroredGroup,true)
+            txt(rightX+12,407,"Creates an editable mirror group.",dim,true)
+            txt(rightX+12,426,"Disables source auto-mirroring.",dim,true)
+            txt(rightX+12,453,"FLIP SELECTED GROUP",cyan)
+            btn(rightX+12,473,283,28,"FLIP PIVOT: "..
+                (flipPivot=="CENTER" and "BOUNDS CENTER" or "EDITOR ORIGIN"),
+                function() flipPivot=flipPivot=="CENTER" and "ORIGIN" or "CENTER" end)
+            btn(rightX+12,512,88,29,"FLIP X",function() flipSelectedGroup(1) end)
+            btn(rightX+109,512,89,29,"FLIP Y",function() flipSelectedGroup(2) end)
+            btn(rightX+205,512,90,29,"FLIP Z",function() flipSelectedGroup(3) end)
+            txt(rightX+12,553,"Flip reflects shape, not a rotation.",dim,true)
+            btn(rightX+12,578,283,29,"DUPLICATE SELECTED GROUP",duplicateSelectedGroup)
+            txt(rightX+12,616,"Tip: Duplicate, flip, then move",yellow,true)
+            txt(rightX+12,633,"it next to original using MOVE.",yellow,true)
+        else
+            drawLibraryPage(rightX)
+        end
+        btn(rightX+12,655,283,28,"H: HIDE EDITOR / USE GMod TOOLS",toggleEditor)
+        panel(350,sh-61,math.max(200,sw-700),49)
+        txt(362,sh-53,status,white,true)
+        txt(362,sh-32,"All props are FROZEN; multiple props are NOT welded.",dim,true)
+        if not flying then
+            local mx,my=input.getCursorPos()
+            render.setColor(yellow)
+            render.drawRectOutline(mx-5,my-5,10,10,1)
+        end
+    end
+
+    local function nearestPoint(mx,my)
+        local best,bg,bp=13*13,nil,nil
+        local offset=chip():getPos()+Vector(0,0,SPAWN_RAISE)
+        for gi=1,#groups do
+            if groups[gi].visible~=false then
+                for pi=1,#groups[gi].points do
+                    local p=groups[gi].points[pi]
+                local sc=(offset+Vector(p[1],p[2],p[3])):toScreen()
+                if sc.visible then
+                    local dx,dy=mx-sc.x,my-sc.y
+                    local ds=dx*dx+dy*dy
+                    if ds<best then best=ds;bg=gi;bp=pi end
+                end
+            end
+            end
+        end
+        return bg,bp
+    end
+    local function screenVertex(pos)
+        local origin=chip():getPos()+Vector(0,0,SPAWN_RAISE)
+        return (origin+pos):toScreen()
+    end
+    local function drawPreview()
+        for i=1,#edges do
+            local e=edges[i]
+            local a,b=screenVertex(e[2]),screenVertex(e[3])
+            if a.visible and b.visible then
+                render.setColor(e[4] and Color(230,160,90) or gc[(e[1]-1)%#gc+1])
+                render.drawLine(a.x,a.y,b.x,b.y)
+            end
+        end
+        for gi=1,#groups do
+            local g=groups[gi]
+            if g.visible~=false then
+                local col=gc[(gi-1)%#gc+1]
+                for pi=1,#g.points do
+                local p=g.points[pi]
+                local sc=screenVertex(Vector(p[1],p[2],p[3]))
+                if sc.visible then
+                    local chosen=gi==selectedGroup and pi==selectedPoint
+                    render.setColor(chosen and yellow or col)
+                    render.drawRect(sc.x-(chosen and 5 or 3),sc.y-(chosen and 5 or 3),
+                                    chosen and 10 or 6,chosen and 10 or 6)
+                    if chosen then txt(sc.x+8,sc.y-9,"G"..gi.." P"..pi,yellow,true) end
+                end
+                if g.mirror then
+                    local s2=screenVertex(Vector(p[1],-p[2],p[3]))
+                    if s2.visible then
+                        render.setColor(Color(248,172,75))
+                        render.drawRectOutline(s2.x-4,s2.y-4,8,8,1)
+                    end
+                end
+            end
+            end
+        end
+    end
+    hook.add("calcview","VertexForgeV11_Camera",function(pos,ang,fov,znear,zfar)
+        if not isActive() then return end
+        ensureCamera()
+        return {origin=cameraPos,angles=cameraAng,fov=90,znear=znear,zfar=zfar,drawviewer=true}
+    end)
+    hook.add("mousemoved","VertexForgeV11_Mouse",function(dx,dy)
+        if not isActive() or not flying then return end
+        ensureCamera()
+        cameraAng=Angle(math.max(-88,math.min(88,cameraAng.p+dy*0.15)),
+                        cameraAng.y-dx*0.15,0)
+    end)
+    hook.add("inputpressed","VertexForgeV11_Keys",function(key)
+        if not render.isHUDActive() then return end
+        -- Text fields own the keyboard first. In particular, H must not
+        -- hide the editor while someone is typing a library filename.
+        if isActive() and inputField then
+            if key==KEY.ENTER or key==KEY.PAD_ENTER then
+                local v=tonumber(typed)
+                if inputField=="LIBRARY_NAME" then
+                    local name=string.gsub(typed,"^%s+","")
+                    name=string.gsub(name,"%s+$","")
+                    name=string.sub(name,1,48)
+                    if name=="" then
+                        libraryName=""
+                        libraryOverwriteKey=nil
+                        status="Library name set to AUTO (selected group name)."
+                    elseif safeLibraryFilename(name) then
+                        libraryName=name
+                        libraryOverwriteKey=nil
+                        status="Library save name: "..libraryName
+                    else
+                        status="Invalid library name. Use letters or numbers."
+                    end
+                elseif inputField=="ANGLE_SNAP" then
+                    if v and v>0 and v<=180 then
+                        angleSnap=math.floor(v*100+0.5)/100
+                        status="Angle snap set to "..angleSnap.." degrees."
+                    else
+                        status="Angle snap must be greater than 0 and <= 180."
+                    end
+                elseif inputField=="SNAP" then
+                    if v and v==v and v>=0.5 and v<=64 then
+                        snap=math.floor(v*100+0.5)/100
+                        status="Position snap set to "..snap.." units."
+                    else
+                        status="Position snap must be between 0.5 and 64."
+                    end
+                else
+                    local ix=inputField=="X" and 1 or (inputField=="Y" and 2 or 3)
+                    if v then changeAxis(ix,v);status="Coordinate updated"
+                    else status="Invalid number" end
+                end
+                inputField=nil;typed="";return
+            elseif key==KEY.ESCAPE then
+                inputField=nil;typed="";return
+            elseif key==KEY.BACKSPACE then
+                typed=string.sub(typed,1,-2);return
+            elseif key==KEY.PERIOD or key==KEY.PAD_DECIMAL then
+                typed=typed..".";return
+            elseif key==KEY.MINUS or key==KEY.PAD_MINUS then
+                if inputField=="LIBRARY_NAME" then
+                    typed=typed..(input.isShiftDown() and "_" or "-")
+                else
+                    typed="-"..typed
+                end
+                return
+            else
+                if inputField=="LIBRARY_NAME" then
+                    if #typed>=48 then return end
+                    if key==KEY.SPACE then typed=typed.." ";return end
+                    if key==KEY.MINUS or key==KEY.PAD_MINUS then
+                        typed=typed..(input.isShiftDown() and "_" or "-");return
+                    end
+                    for i=65,90 do
+                        local char=string.char(i)
+                        if key==KEY[char] then
+                            typed=typed..(input.isShiftDown() and char or string.lower(char))
+                            return
+                        end
+                    end
+                end
+                for d=0,9 do
+                    if key==KEY[tostring(d)] or key==KEY["PAD_"..d] then
+                        typed=typed..d;return
+                    end
+                end
+            end
+            return
+        end
+        -- H remains usable for reopening the editor after it has been hidden.
+        if key==KEY.H then toggleEditor();return end
+        if not isActive() then return end
+        if key==KEY.F then
+            setMode(not flying)
+        elseif key==KEY.DELETE and not flying then
+            removeSelectedPoint()
+        end
+    end)
+    hook.add("inputbindpressed","VertexForgeV11_NoPlayerMove",function(bind)
+        if not isActive() then return end
+        -- Default chat keys (Y / U) must not open the chat box while naming
+        -- a shape. Catch their actual binds, including custom key mappings.
+        if inputField and (bind=="messagemode" or bind=="messagemode2" or
+           bind=="say" or bind=="say_team") then return true end
+        if bind=="+forward" or bind=="+back" or bind=="+moveleft"
+           or bind=="+moveright" or bind=="+jump" or bind=="+duck"
+           or bind=="+speed" or bind=="+attack" or bind=="+attack2" then
+            return true
+        end
+    end)
+    hook.add("think","VertexForgeV11_Think",function()
+        local active=isActive()
+        if active~=activeEditor then
+            activeEditor=active
+            setToolgunHelpHidden(active)
+            if active then
+                ensureCamera();setMode(false)
+                status="HUD enabled. Edit by clicking vertices, or press F to fly."
+            else
+                setCursor(false)
+                flying=false;dragging=false;inputField=nil
+                importMode=false;importPending=false
+                mouseWasDown=false
+                dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+            end
+        end
+        if not active then return end
+        local now=timer.curtime()
+        local dt=math.max(0,math.min(now-lastThink,0.06))
+        lastThink=now
+        if flying then
+            local mv=Vector(0,0,0)
+            if input.isKeyDown(KEY.W) then mv=mv+cameraAng:getForward() end
+            if input.isKeyDown(KEY.S) then mv=mv-cameraAng:getForward() end
+            if input.isKeyDown(KEY.D) then mv=mv+cameraAng:getRight() end
+            if input.isKeyDown(KEY.A) then mv=mv-cameraAng:getRight() end
+            if input.isKeyDown(KEY.SPACE) then mv=mv+Vector(0,0,1) end
+            if input.isKeyDown(KEY.LCONTROL) then mv=mv-Vector(0,0,1) end
+            if mv:getLength()>0 then
+                cameraPos=cameraPos+mv:getNormalized()*dt*(input.isShiftDown() and 1100 or 330)
+            end
+        else
+            local mx,my=input.getCursorPos()
+            local down=input.isMouseDown(MOUSE.LEFT)
+            if down and not mouseWasDown then
+                local clicked=false
+                for i=1,#hitButtons do
+                    local r=hitButtons[i]
+                    if cursorOverRect(mx,my,r) then
+                        r.fn();clicked=true;break
+                    end
+                end
+                if not clicked and importMode then
+                    clicked=true -- Import takes priority over point editing.
+                    if not importPending then
+                        -- screenToVector is relative to the active calcview
+                        -- camera. A ray trace selects the actual prop surface.
+                        local ray=input.screenToVector(mx,my)
+                        local hit=trace.line(cameraPos,cameraPos+ray*8192)
+                        local ent=hit and hit.Entity
+                        if ent and ent:isValid() and ent:getClass()=="starfall_prop" then
+                            importPending=true
+                            net.start(MSG_IMPORT_REQUEST)
+                            net.writeEntity(ent)
+                            net.send()
+                            status="Reading custom prop physics mesh..."
+                        else
+                            status="No Starfall prop at cursor. Aim at its solid surface."
+                        end
+                    end
+                end
+                if not clicked then
+                    local gi,pi=nearestPoint(mx,my)
+                    if gi then
+                        selectedGroup=gi;selectedPoint=pi;dragging=true
+                        if groupDrag then
+                            -- Fixed work plane and initial cursor position stop
+                            -- the whole group from drifting under the cursor.
+                            dragAnchorWorld=selectedWorld()
+                            dragStartCursor=worldPointAt(mx,my,dragAnchorWorld)
+                            dragGroupSnapshot={}
+                            local g=current()
+                            for j=1,#g.points do
+                                dragGroupSnapshot[j]=copyPoint(g.points[j])
+                            end
+                            if not dragStartCursor then dragging=false end
+                        end
+                    elseif adding and current() then
+                        local picked=worldPointAt(mx,my,selectedWorld())
+                        if picked then
+                            current().points[#current().points+1]=picked
+                            selectedPoint=#current().points;dirty()
+                            status="Added point. 4 noncoplanar points minimum per group."
+                        else
+                            status="Ray misses work plane. Try another X/Y/Z plane."
+                        end
+                    end
+                end
+            end
+            if down and dragging then
+                if groupDrag and dragAnchorWorld and dragStartCursor and dragGroupSnapshot then
+                    -- Ray/plane intersection is anchored to the ORIGINAL
+                    -- vertex. Translate every point from a fixed snapshot.
+                    local p=worldPointAt(mx,my,dragAnchorWorld)
+                    if p then
+                        local delta={p[1]-dragStartCursor[1],
+                                     p[2]-dragStartCursor[2],
+                                     p[3]-dragStartCursor[3]}
+                        if editPlane=="X" then delta[1]=0
+                        elseif editPlane=="Y" then delta[2]=0
+                        else delta[3]=0 end
+                        local g=current()
+                        for j=1,#dragGroupSnapshot do
+                            local orig=dragGroupSnapshot[j]
+                            local dest=g.points[j]
+                            dest[1]=orig[1]+delta[1]
+                            dest[2]=orig[2]+delta[2]
+                            dest[3]=orig[3]+delta[3]
+                        end
+                        dirty()
+                    end
+                else
+                    -- Original V1 point-only drag remains unchanged.
+                    local ref=selectedWorld()
+                    if ref then
+                        local p=worldPointAt(mx,my,ref)
+                        if p then
+                            local currentGroup=current()
+                            local old=currentGroup.points[selectedPoint]
+                            if editPlane=="X" then p[1]=old[1]
+                            elseif editPlane=="Y" then p[2]=old[2]
+                            else p[3]=old[3] end
+                            if p[1]~=old[1] or p[2]~=old[2] or p[3]~=old[3] then
+                                currentGroup.points[selectedPoint]=p;dirty()
+                            end
+                        end
+                    end
+                end
+            end
+            if not down then
+                dragging=false
+                dragAnchorWorld,dragStartCursor,dragGroupSnapshot=nil,nil,nil
+            end
+            mouseWasDown=down
+        end
+        if previewDirty and now>=previewNext then
+            previewNext=now+0.20
+            previewBuild()
+        end
+    end)
+    if player()==owner() then enableHud(nil,true) end
+    hook.add("drawhud","VertexForgeV11_Draw",function()
+        if not isActive() then return end
+        local w,h=render.getResolution()
+        drawPreview()
+        drawUI(w,h)
+    end)
+end
